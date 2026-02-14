@@ -5,13 +5,13 @@
 MagicaVoxel 等のボクセルエディタからレンダリングした画像，または生成 AI で作成したキャラクター画像を入力とし，最終的に Bevy Engine で利用可能なスプライトシート + メタデータ JSON を出力する．AI 生成パスと従来インポートパスは共存し，いずれも共通パイプライン（BG Removal 以降）に合流する．
 
 ```
-┌────────────────────────────────── AI 生成パス（新規）────────────────────────┐
-│  ┌──────────┐    ┌──────────┐    ┌──────────────┐                          │
-│  │ Concept  │ →  │ Direction│ →  │ Animation    │ ──┐                      │
-│  │ (1枚)    │    │ (4方向)  │    │ (フレーム群) │   │                      │
-│  └──────────┘    └──────────┘    └──────────────┘   │                      │
-│     (A1)            (A2)              (A3)           │                      │
-└─────────────────────────────────────────────────────│──────────────────────┘
+┌────────────────────────────────── AI 生成パス ──────────────────────────────┐
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────┐  ┌──────────────┐       │
+│  │Concept Art   │→ │Pixel Art     │→ │ Direction│→ │ Animation    │──┐    │
+│  │(1枚:txt2img) │  │(変換:img2img)│  │ (4方向)  │  │ (フレーム群) │  │    │
+│  └──────────────┘  └──────────────┘  └──────────┘  └──────────────┘  │    │
+│     (A1a)              (A1b)            (A2)            (A3)          │    │
+└──────────────────────────────────────────────────────────────────────│────┘
                                                        │
 ┌──────────────── 従来インポートパス ──────────────────│──────────────────────┐
 │  ┌────────┐    ┌────────────┐                        │                      │
@@ -60,13 +60,13 @@ generated ──→ raw ──→ ai_processed ──→ bg_removed ──→ fi
 
 ## 各ステージの処理詳細
 
-### (A1) Concept -- コンセプト生成
+### (A1a) Concept Art -- コンセプトアート生成
 
-テキストプロンプトからキャラクター原案を1枚生成するステージ．ユーザーが入力したプロンプトに基づき，ピクセルアート風のキャラクターコンセプト画像を生成する．
+テキストプロンプトから詳細なキャラクターイラスト（コンセプトアート）を1枚生成するステージ．
 
 **生成バックエンド:**
 
-- **ComfyUI（ローカル）:** SDXL + Pixel Art XL LoRA を使用した txt2img ワークフロー
+- **ComfyUI（ローカル）:** `concept_art_generation.json` テンプレートによる txt2img
 - **クラウド API:** PixelLab / fal.ai を使用したリモート生成
 
 **出力先:** `{base_path}/{character_name}/concepts/`
@@ -77,9 +77,31 @@ generated ──→ raw ──→ ai_processed ──→ bg_removed ──→ fi
 2. 生成バックエンド（ComfyUI またはクラウド API）にリクエストを送信
 3. 生成結果を `concepts/` ディレクトリに保存
 4. ユーザーが結果を確認・選別・リトライ可能
-5. 承認されたコンセプトが (A2) Direction Expansion の入力となる
+5. 承認されたコンセプトアートが (A1b) Pixel Art Conversion の入力となる
 
 **参照ファイル:** `docs/architecture/ai-generation.md`
+
+---
+
+### (A1b) Pixel Art Conversion -- ピクセルアート変換
+
+コンセプトアート画像をピクセルアートに変換するステージ（img2img）．
+
+**生成バックエンド:**
+
+- **ComfyUI（ローカル）:** `pixel_art_conversion.json` テンプレートによる img2img 変換
+- **クラウド API:** クラウド API 側でのピクセルアート変換
+
+**出力先:** `{base_path}/{character_name}/concepts/`
+
+**処理フロー:**
+
+1. (A1a) で承認されたコンセプトアートを入力画像として使用
+2. img2img 変換でピクセルアートに変換
+3. `pixel_grid_width` / `pixel_grid_height` が設定されている場合，`pixelate_image()` による Rust 側グリッド整列を自動適用
+4. 変換結果が (A2) Direction Expansion の入力となる
+
+**参照ファイル:** `src-tauri/src/commands/image_processing.rs`（`pixelate_image` 関数）
 
 ---
 
@@ -119,6 +141,17 @@ generated ──→ raw ──→ ai_processed ──→ bg_removed ──→ fi
 3. 生成完了後，`sprites` テーブルに `generated` ステータスで登録
 4. ユーザーが生成結果を確認・承認すると `raw` ステータスに遷移し，共通パイプラインに入る
 
+**キーフレーム補間（Sprint 8 追加）:**
+
+`AnimationParams` に `keyframes` および `interpolation` フィールドが追加された．キーフレームが指定された場合，指定されたフレームのみ AI で生成し，中間フレームは補間アルゴリズムで自動生成される．これにより AI 生成回数を削減しつつ滑らかなアニメーションを実現する．
+
+| 補間方式 | 説明 |
+|---------|------|
+| crossfade | 前後のキーフレームをクロスフェードで補間 |
+| nearest | 最も近いキーフレームのコピーで補間 |
+
+**参照ファイル:** `src-tauri/src/services/frame_interpolation.rs`
+
 ---
 
 ### (1) Import -- スプライトインポート
@@ -154,7 +187,7 @@ generated ──→ raw ──→ ai_processed ──→ bg_removed ──→ fi
 
 ```
 {base_path}/{character_name}/
-├── concepts/             # (A1) コンセプト画像
+├── concepts/             # (A1a-A1b) コンセプトアート・ピクセルアート画像
 │   ├── concept_001.png
 │   └── concept_002.png
 ├── generated/            # (A2-A3) AI生成スプライト
@@ -226,7 +259,7 @@ ComfyUI サーバーと連携し，ボクセルレンダリング画像にフィ
 
 ワークフロー JSON 内のプレースホルダは `{{key}}` 形式で記述し，処理時に実値に置換される．
 
-**対応プレースホルダ（8種）:**
+**対応プレースホルダ（17種）:**
 
 | プレースホルダ | 型 | 説明 | 置換元 |
 |--------------|-----|------|-------|
@@ -238,6 +271,15 @@ ComfyUI サーバーと連携し，ボクセルレンダリング画像にフィ
 | `{{cfg_scale}}` | 数値 | CFG スケール | `ProcessingParams.cfg_scale` |
 | `{{denoise_strength}}` | 数値 | デノイズ強度 | `ProcessingParams.denoise_strength` |
 | `{{controlnet_weight}}` | 数値 | ControlNet ウェイト | `ProcessingParams.controlnet_weight` |
+| `{{checkpoint_name}}` | 文字列 | チェックポイントモデル名 | 動的モデル選択 |
+| `{{lora_name}}` | 文字列 | LoRA モデル名 | 動的モデル選択 |
+| `{{lora_strength_model}}` | 数値 | LoRA モデル強度 | 動的モデル選択 |
+| `{{lora_strength_clip}}` | 数値 | LoRA CLIP 強度 | 動的モデル選択 |
+| `{{reference_image}}` | 文字列 | IP-Adapter 参照画像ファイル名 | コンセプト画像パス |
+| `{{ipadapter_weight}}` | 数値 | IP-Adapter ウェイト | デフォルト: 0.8 |
+| `{{direction}}` | 文字列 | 方向名 | 方向展開時の方向指定 |
+| `{{animation_name}}` | 文字列 | アニメーション名 | アニメーション展開時のアニメーション種別 |
+| `{{frame_index}}` | 数値 | フレームインデックス | アニメーション展開時のフレーム番号 |
 
 **置換処理の仕様:**
 
@@ -468,7 +510,7 @@ ONNX Runtime 上の U2-Net モデルを使用して，スプライト画像の�
 ```
 {base_path}/
 ├── {character_name_1}/
-│   ├── concepts/               # (A1) コンセプト画像
+│   ├── concepts/               # (A1a-A1b) コンセプトアート・ピクセルアート画像
 │   │   ├── concept_001.png
 │   │   └── concept_002.png
 │   ├── generated/              # (A2-A3) AI生成スプライト
@@ -527,7 +569,7 @@ ONNX Runtime 上の U2-Net モデルを使用して，スプライト画像の�
 
 | イベント名 | 送出元ステージ | ペイロード |
 |-----------|--------------|----------|
-| `concept-generation-progress` | (A1) Concept 生成 | `{ step, candidates_generated, status }` |
+| `concept-generation-progress` | (A1a-A1b) Concept Art / Pixel Art 生成 | `{ step, candidates_generated, status }` |
 | `direction-generation-progress` | (A2) Direction 展開 | `{ current_direction, total_directions, status }` |
 | `animation-generation-progress` | (A3) Animation 展開 | `{ direction, animation, current_frame, total_frames, status }` |
 | `download-progress` | ONNX モデルダウンロード | `{ downloaded, total, percentage }` |

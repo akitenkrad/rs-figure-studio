@@ -2,7 +2,9 @@
 
 ## 概要
 
-GPU を持たないユーザー向けに，クラウド API 経由でキャラクタースプライト生成を提供する機能である．ComfyUI（ローカル GPU）の代替として機能し，同じ生成パイプライン（コンセプト → 方向展開 → アニメーション展開）を実現する．複数のクラウドサービスに対応しており，ユーザーが用途やコストに応じて選択可能である．
+GPU を持たないユーザー向けに，クラウド API 経由でキャラクタースプライト生成を提供する機能である．ComfyUI（ローカル GPU）の代替として機能し，同じ生成パイプライン（コンセプトアート → ピクセルアート変換 → 方向展開 → アニメーション展開）を実現する．複数のクラウドサービスに対応しており，ユーザーが用途やコストに応じて選択可能である．
+
+Sprint 8 時点で，`CloudApiBackend`（`src-tauri/src/services/cloud_api_backend.rs`）の `generate_concept_art()` および `convert_to_pixel_art()` メソッドが実装済みである．`generate_directions()` と `generate_animation_frames()` は今後のスプリントで実装予定である．
 
 ### スプライトパイプラインにおける位置づけ
 
@@ -15,7 +17,8 @@ Import (raw) → [AI Texture (ComfyUI / Cloud API)] → BG Removal (ONNX) → No
 
 | ファイル | 役割 |
 |---------|------|
-| **新規** `src-tauri/src/services/cloud_api_client.rs` | クラウド API クライアント |
+| `src-tauri/src/services/cloud_api_backend.rs` | CloudApiBackend 実装（`generate_concept_art`，`convert_to_pixel_art` 実装済み） |
+| `src-tauri/src/services/cloud_api_client.rs` | クラウド API クライアント |
 | `src-tauri/src/error.rs` | AppError 拡張（CloudAPI バリアント追加） |
 | `src-tauri/tauri.conf.json` | CSP 設定更新 |
 | `src/routes/settings/` | API キー設定 UI |

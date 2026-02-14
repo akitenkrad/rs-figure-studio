@@ -9,25 +9,28 @@ Figurine Studio に追加される新しいキャラクター素材生成パス�
 ## パイプライン全体図
 
 ```
-┌─────────────────── AI 生成パス ─────────────────────────┐
-│                                                          │
-│  Step 1: コンセプト生成（1枚）                            │
-│    テキストプロンプト → キャラクター原案画像               │
-│         ↓                                                │
-│  Step 2: 方向展開（4枚）                                  │
-│    コンセプト画 + IP-Adapter + ControlNet → 4方向ポーズ   │
-│         ↓                                                │
-│  Step 3: アニメーション展開（方向×フレーム数）              │
-│    各方向ポーズ + ControlNet → フレーム群                  │
-│         ↓                                                │
-└──→ BG Removal → Normalize → Spritesheet → Bevy Export   │
-                                                           │
-┌─── 従来パス（併用） ────────────────────────────────────┐│
-│  MagicaVoxel等 → Import → (AI Texture) ─────────────→──┘│
-└──────────────────────────────────────────────────────────┘
+┌─────────────────── AI 生成パス ─────────────────────────────────┐
+│                                                                  │
+│  Step 1a: コンセプトアート生成（1枚）                             │
+│    テキストプロンプト → 詳細キャラクターイラスト（txt2img）        │
+│         ↓                                                        │
+│  Step 1b: ピクセルアート変換                                      │
+│    コンセプトアート → ピクセルアート化（img2img）                  │
+│         ↓                                                        │
+│  Step 2: 方向展開（4枚）                                          │
+│    ピクセルアート + IP-Adapter + ControlNet → 4方向ポーズ         │
+│         ↓                                                        │
+│  Step 3: アニメーション展開（方向×フレーム数）                      │
+│    各方向ポーズ + ControlNet → フレーム群                          │
+│         ↓                                                        │
+└──→ BG Removal → Normalize → Spritesheet → Bevy Export           │
+                                                                   │
+┌─── 従来パス（併用） ────────────────────────────────────────────┐│
+│  MagicaVoxel等 → Import → (AI Texture) ─────────────────────→──┘│
+└──────────────────────────────────────────────────────────────────┘
 ```
 
-AI 生成パスで生成された画像は，Step 3 完了後に既存パイプラインの BG Removal ステージに合流する．従来のインポートパスとは独立して動作し，同一プロジェクト内で両方のパスを使い分けることができる．
+AI 生成パスで生成された画像は，Step 3 完了後に既存パイプラインの BG Removal ステージに合流する．従来のインポートパスとは独立して動作し，同一プロジェクト内で両方のパスを使い分けることができる．コンセプトステージは2段階構成（コンセプトアート生成 → ピクセルアート変換）となっており，高品質なイラストを先に生成してからピクセルアートに変換することで，最終的な品質を向上させている．
 
 ---
 
@@ -99,15 +102,16 @@ AI 生成パスで生成された画像は，Step 3 完了後に既存パイプ�
 - **生成解像度:** 512x512 で生成し，ブロックモード色選択でダウンスケール
 - **パレット正規化:** クラスタリングベースの色量子化により，統一パレットを適用
 - **ピクセルグリッド整列:** ComfyUI PixelArt-Detector ノード，または Rust image crate による後処理
+- **Rust 側グリッド整列（Sprint 8 追加）:** `pixelate_image()` 関数（`src-tauri/src/commands/image_processing.rs`）が nearest-neighbor 方式でダウンスケール→アップスケールを行い，ミクセル（mixel）を修正する．ピクセルアート変換後に `pixel_grid_width` / `pixel_grid_height` パラメータが設定されている場合，自動的に適用される
 - **実用品質の目安:** 128x128 以上で良好（70-80%），256x256 で最良
 
 ---
 
 ## 各ステップの処理詳細
 
-### Step 1: コンセプト生成
+### Step 1a: コンセプトアート生成
 
-テキストプロンプトから1枚のキャラクター原案画像を生成する．
+テキストプロンプトから1枚の詳細キャラクターイラスト（コンセプトアート）を生成する．
 
 **Input:**
 - テキストプロンプト（キャラクターの外見・スタイルの記述）
@@ -117,14 +121,35 @@ AI 生成パスで生成された画像は，Step 3 完了後に既存パイプ�
 
 | バックエンド | 処理内容 |
 |-------------|---------|
-| ComfyUI | SDXL + Pixel Art XL LoRA による txt2img |
+| ComfyUI | `concept_art_generation.json` テンプレートによる txt2img |
 | Cloud API | PixelLab / fal.ai / Replicate API コール |
 
 **Output:**
-- 1枚のコンセプト画像
+- 1枚のコンセプトアート画像
 - 保存先: `{base_path}/{character_name}/concepts/`
 
-ユーザーが結果を確認し，満足のいく結果が得られるまでリトライが可能である．採用するコンセプト画像を選別したうえで次のステップに進む．
+ユーザーが結果を確認し，満足のいく結果が得られるまでリトライが可能である．採用するコンセプトアートを選別したうえで次のステップに進む．
+
+---
+
+### Step 1b: ピクセルアート変換
+
+コンセプトアート画像をピクセルアートに変換する（img2img）．
+
+**Input:**
+- コンセプトアート画像（Step 1a で選択したもの）
+
+**処理パス:**
+
+| バックエンド | 処理内容 |
+|-------------|---------|
+| ComfyUI | `pixel_art_conversion.json` テンプレートによる img2img 変換 |
+| Cloud API | クラウド API 側でのピクセルアート変換 |
+
+**Output:**
+- 1枚のピクセルアート画像
+- 保存先: `{base_path}/{character_name}/concepts/`
+- `pixel_grid_width` / `pixel_grid_height` が設定されている場合，`pixelate_image()` による Rust 側グリッド整列が自動適用される
 
 ---
 
@@ -167,6 +192,10 @@ AI 生成パスで生成された画像は，Step 3 完了後に既存パイプ�
 |-------------|---------|
 | ComfyUI | IP-Adapter（基本ポーズ画像を参照）+ ControlNet（フレーム別ポーズスケルトン），seed 固定のフレーム単位バッチ生成 |
 | Cloud API | Retro Diffusion アニメーションプリセット / PixelLab animation API |
+
+**キーフレーム補間（Sprint 8 追加）:**
+
+`AnimationParams` に `keyframes` と `interpolation` フィールドが追加された．キーフレームが指定された場合，指定されたフレームのみ AI で生成し，中間フレームは補間で生成する（`src-tauri/src/services/frame_interpolation.rs`）．補間方式は crossfade（クロスフェード）と nearest（最近傍）から選択可能である．これにより AI 生成回数を削減しつつ，滑らかなアニメーションを実現する．
 
 **Output:**
 - 方向 x アニメーション x フレーム数 の画像群
@@ -222,9 +251,11 @@ AI 生成パスの導入に伴い，キャラクターディレクトリに `con
 ComfyUI とクラウド API を統一的に扱うための抽象レイヤーを設計する．
 
 ```rust
-// GenerationBackend trait（概念設計）
+// GenerationBackend trait
 trait GenerationBackend {
     async fn generate_concept(&self, params: ConceptParams) -> Result<Vec<PathBuf>, AppError>;
+    async fn generate_concept_art(&self, params: ConceptParams) -> Result<Vec<PathBuf>, AppError>;
+    async fn convert_to_pixel_art(&self, concept: &Path, params: ConceptParams) -> Result<Vec<PathBuf>, AppError>;
     async fn generate_directions(&self, concept: &Path, params: DirectionParams) -> Result<Vec<PathBuf>, AppError>;
     async fn generate_animation_frames(&self, base_pose: &Path, params: AnimationParams) -> Result<Vec<PathBuf>, AppError>;
 }
@@ -235,7 +266,7 @@ trait GenerationBackend {
 | 実装 | ソースファイル | 説明 |
 |------|-------------|------|
 | `ComfyUIBackend` | `src-tauri/src/services/comfyui_client.rs` | 既存 ComfyUI HTTP クライアントを拡張 |
-| `CloudAPIBackend` | **新規** `src-tauri/src/services/cloud_api_client.rs` | PixelLab / fal.ai / Replicate クライアント |
+| `CloudApiBackend` | `src-tauri/src/services/cloud_api_backend.rs` | クラウド API クライアント（`generate_concept_art`，`convert_to_pixel_art` 実装済み） |
 
 ユーザーが設定画面でバックエンドを選択し，`app_settings` テーブルに保存する．ランタイムでは選択されたバックエンドに応じて適切な実装が使用される．
 
@@ -247,12 +278,13 @@ ComfyUI バックエンド用に，以下のプリビルトワークフロー JS
 
 | テンプレート | 用途 |
 |-------------|------|
-| `concept_generation.json` | txt2img with Pixel Art LoRA によるコンセプト生成 |
+| `concept_art_generation.json` | txt2img によるコンセプトアート生成（詳細イラスト） |
+| `concept_generation.json` | txt2img with Pixel Art LoRA によるコンセプト生成（レガシー） |
+| `pixel_art_conversion.json` | img2img によるピクセルアート変換 |
 | `direction_expansion.json` | IP-Adapter + ControlNet による多方向展開 |
-| `animation_frame.json` | IP-Adapter + ControlNet によるフレーム単位生成（seed 固定） |
-| `post_process_pixelart.json` | パレット量子化 + グリッド正規化によるピクセルアート後処理 |
+| `animation_expansion.json` | IP-Adapter + ControlNet によるフレーム単位アニメーション生成（seed 固定） |
 
-テンプレートはアプリ内にバンドルされ，ユーザーがカスタムワークフローとして編集・保存することも可能とする．
+全テンプレートで `{{checkpoint_name}}` プレースホルダによる動的モデル選択をサポートしている．`concept_generation.json` と `pixel_art_conversion.json` は追加で `{{lora_name}}`，`{{lora_strength_model}}`，`{{lora_strength_clip}}` プレースホルダも使用可能である．テンプレートはアプリ内にバンドルされ，ユーザーがカスタムワークフローとして編集・保存することも可能とする．
 
 ---
 
@@ -273,16 +305,18 @@ ComfyUI バックエンド用に，以下のプリビルトワークフロー JS
 
 ## 段階的導入計画
 
-| Phase | 内容 | 優先度 |
+| Phase | 内容 | ステータス |
 |---|---|---|
-| Phase 1 | コンセプト生成（ComfyUI ワークフローテンプレート + UI） | 高 |
-| Phase 2 | 方向展開（IP-Adapter + ControlNet） | 高 |
-| Phase 3 | アニメーション展開（フレーム単位バッチ生成） | 高 |
-| Phase 4 | クラウド API クライアント（PixelLab / fal.ai） | 中 |
-| Phase 5 | パレット正規化・ピクセルグリッド整列ポスト処理 | 中 |
+| Phase 1 | コンセプト生成（ComfyUI ワークフローテンプレート + UI） | 完了（Sprint 6-7） |
+| Phase 2 | 方向展開（IP-Adapter + ControlNet） | 完了（Sprint 6-7） |
+| Phase 3 | アニメーション展開（フレーム単位バッチ生成） | 完了（Sprint 6-7） |
+| Phase 4 | クラウド API クライアント（PixelLab / fal.ai） | 一部完了（Sprint 8: generate_concept_art，convert_to_pixel_art 実装済み） |
+| Phase 5 | パレット正規化・ピクセルグリッド整列ポスト処理 | 完了（Sprint 8: pixelate_image 実装） |
 | Phase 6 | LoRA 管理（外部学習 → インポート） | 低 |
+| Phase 7 | 動的モデル選択（チェックポイント / LoRA 一覧取得） | 完了（Sprint 8） |
+| Phase 8 | キーフレーム補間（crossfade / nearest） | 完了（Sprint 8） |
 
-Phase 1-3 は ComfyUI バックエンドを前提とし，ローカル GPU 環境での動作を優先する．Phase 4 以降でクラウド API バックエンドを追加し，GPU 不要の環境にも対応する．
+Phase 1-3 は ComfyUI バックエンドを前提とし，ローカル GPU 環境での動作を優先する．Phase 4 以降でクラウド API バックエンドを追加し，GPU 不要の環境にも対応する．Sprint 8 では，ピクセルグリッド整列，キーフレーム補間，動的モデル選択，および CloudApiBackend の部分実装が完了した．
 
 ---
 
@@ -299,7 +333,10 @@ Phase 1-3 は ComfyUI バックエンドを前提とし，ローカル GPU 環�
 
 | ファイル | 役割 |
 |---|---|
-| `src-tauri/src/services/comfyui_client.rs` | 既存 ComfyUI HTTP クライアント（拡張対象） |
+| `src-tauri/src/services/comfyui_client.rs` | ComfyUI HTTP クライアント |
+| `src-tauri/src/services/generation_backend.rs` | 生成バックエンド抽象レイヤー（GenerationBackend trait） |
+| `src-tauri/src/services/cloud_api_backend.rs` | CloudApiBackend 実装（generate_concept_art，convert_to_pixel_art 実装済み） |
+| `src-tauri/src/services/frame_interpolation.rs` | キーフレーム補間（crossfade / nearest） |
+| `src-tauri/src/commands/image_processing.rs` | pixelate_image（ピクセルグリッド整列） |
+| `src-tauri/src/commands/generation.rs` | AI 生成パイプラインコマンド |
 | `src-tauri/src/models/workflow.rs` | ProcessingParams（拡張対象） |
-| **新規** `src-tauri/src/services/cloud_api_client.rs` | クラウド API クライアント |
-| **新規** `src-tauri/src/services/generation_backend.rs` | 生成バックエンド抽象レイヤー |

@@ -19,8 +19,10 @@ Import (raw) → [AI Texture (ComfyUI)] ──→ BG Removal (ONNX) → Normaliz
 | ファイル | 役割 |
 |---------|------|
 | `src-tauri/src/services/comfyui_client.rs` | HTTP クライアント実装 |
+| `src-tauri/src/services/generation_backend.rs` | 生成バックエンド抽象レイヤー（GenerationBackend trait） |
 | `src-tauri/src/commands/comfyui.rs` | Tauri コマンド（フロントエンド API） |
 | `src-tauri/src/models/workflow.rs` | ワークフロー・処理パラメータモデル |
+| `src-tauri/src/models/comfyui_model.rs` | ComfyUI モデル情報型定義 |
 | `src-tauri/tauri.conf.json` | CSP（Content Security Policy）設定 |
 
 ---
@@ -214,7 +216,7 @@ let delay = Duration::from_secs(2u64.pow(attempt));
 
 ComfyUI ワークフロー JSON 内の `{{key}}` 形式のプレースホルダが，実行時に実際の値に置換される．
 
-### プレースホルダ一覧（8種）
+### プレースホルダ一覧（17種）
 
 | プレースホルダ | 型 | 説明 | 値の出所 |
 |--------------|-----|------|---------|
@@ -226,6 +228,15 @@ ComfyUI ワークフロー JSON 内の `{{key}}` 形式のプレースホルダ�
 | `{{cfg_scale}}` | 数値 | CFG スケール | `ProcessingParams.cfg_scale` |
 | `{{denoise_strength}}` | 数値 | デノイズ強度 | `ProcessingParams.denoise_strength` |
 | `{{controlnet_weight}}` | 数値 | ControlNet ウェイト | `ProcessingParams.controlnet_weight` |
+| `{{checkpoint_name}}` | 文字列 | チェックポイントモデル名 | 動的モデル選択（全テンプレート共通） |
+| `{{lora_name}}` | 文字列 | LoRA モデル名 | 動的モデル選択（concept_generation / pixel_art_conversion） |
+| `{{lora_strength_model}}` | 数値 | LoRA モデル強度 | 動的モデル選択 |
+| `{{lora_strength_clip}}` | 数値 | LoRA CLIP 強度 | 動的モデル選択 |
+| `{{reference_image}}` | 文字列 | IP-Adapter 参照画像ファイル名 | コンセプト画像パス |
+| `{{ipadapter_weight}}` | 数値 | IP-Adapter ウェイト | デフォルト: 0.8 |
+| `{{direction}}` | 文字列 | 方向名 | 方向展開時の方向指定（down，left，right，up） |
+| `{{animation_name}}` | 文字列 | アニメーション名 | アニメーション展開時のアニメーション種別 |
+| `{{frame_index}}` | 数値 | フレームインデックス | アニメーション展開時のフレーム番号 |
 
 ### 置換ルール
 
@@ -404,23 +415,39 @@ AI キャラクター生成では，コンセプト生成 → 方向展開 → �
 
 ### 追加プレースホルダ
 
-既存の8種のプレースホルダに加え，AI キャラクター生成ワークフローで使用する追加プレースホルダを以下に示す．
+既存のプレースホルダに加え，AI キャラクター生成ワークフローで使用する追加プレースホルダを以下に示す．
 
 | プレースホルダ | 型 | 説明 |
 |---|---|---|
+| `{{checkpoint_name}}` | 文字列 | チェックポイントモデル名（全テンプレート共通） |
 | `{{reference_image}}` | 文字列 | IP-Adapter 参照画像ファイル名 |
 | `{{ipadapter_weight}}` | 数値 | IP-Adapter ウェイト（デフォルト: 0.8） |
 | `{{lora_name}}` | 文字列 | 使用する LoRA モデル名 |
-| `{{lora_weight}}` | 数値 | LoRA ウェイト（デフォルト: 1.0） |
+| `{{lora_strength_model}}` | 数値 | LoRA モデル強度（デフォルト: 1.0） |
+| `{{lora_strength_clip}}` | 数値 | LoRA CLIP 強度（デフォルト: 1.0） |
 
 ### ワークフローテンプレート
 
 | テンプレート | 用途 | 必要カスタムノード |
 |---|---|---|
-| `concept_generation.json` | txt2img コンセプト生成 | Pixel Art XL LoRA |
-| `direction_expansion.json` | IP-Adapter + ControlNet 方向展開 | ComfyUI_IPAdapter_plus, comfyui_controlnet_aux |
-| `animation_frame.json` | フレーム単位アニメーション生成 | ComfyUI_IPAdapter_plus, comfyui_controlnet_aux |
-| `post_process_pixelart.json` | パレット量子化 + グリッド正規化 | ComfyUI-PixelArt-Detector |
+| `concept_art_generation.json` | txt2img コンセプトアート生成（詳細イラスト） | -- |
+| `concept_generation.json` | txt2img コンセプト生成（Pixel Art LoRA） | Pixel Art XL LoRA |
+| `pixel_art_conversion.json` | img2img ピクセルアート変換 | ComfyUI-PixelArt-Detector |
+| `direction_expansion.json` | IP-Adapter + ControlNet 方向展開 | ComfyUI_IPAdapter_plus，comfyui_controlnet_aux |
+| `animation_expansion.json` | フレーム単位アニメーション生成 | ComfyUI_IPAdapter_plus，comfyui_controlnet_aux |
+
+### 動的モデル選択
+
+Sprint 8 で導入された動的モデル選択機能により，ワークフローテンプレート内のモデル名がハードコードされなくなった．全5テンプレートで `{{checkpoint_name}}` プレースホルダを使用し，実行時にユーザーが選択したチェックポイントモデル名に置換される．
+
+**モデル一覧取得コマンド:**
+
+| コマンド | ComfyUI エンドポイント | 説明 |
+|---------|----------------------|------|
+| `list_available_checkpoints` | `GET /object_info/CheckpointLoaderSimple` | 利用可能なチェックポイントモデルの一覧を取得 |
+| `list_available_loras` | `GET /object_info/LoraLoader` | 利用可能な LoRA モデルの一覧を取得 |
+
+これらのコマンドは ComfyUI の `/object_info/` エンドポイントに問い合わせ，インストール済みモデルの一覧をフロントエンドに返却する．ユーザーは UI 上でモデルを選択でき，選択されたモデル名がワークフローテンプレートのプレースホルダに埋め込まれる．
 
 ### 必要カスタムノード
 
