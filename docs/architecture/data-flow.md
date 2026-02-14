@@ -2,37 +2,124 @@
 
 ## スプライトパイプライン全体図
 
-MagicaVoxel 等のボクセルエディタからレンダリングした画像を入力とし，最終的に Bevy Engine で利用可能なスプライトシート + メタデータ JSON を出力する．
+MagicaVoxel 等のボクセルエディタからレンダリングした画像，または生成 AI で作成したキャラクター画像を入力とし，最終的に Bevy Engine で利用可能なスプライトシート + メタデータ JSON を出力する．AI 生成パスと従来インポートパスは共存し，いずれも共通パイプライン（BG Removal 以降）に合流する．
 
 ```
-┌────────┐    ┌────────────┐    ┌────────────┐    ┌───────────┐    ┌─────────────┐    ┌─────────────┐
-│ Import  │ →  │ AI Texture │ →  │ BG Removal │ →  │ Normalize │ →  │ Spritesheet │ →  │ Bevy Export │
-│         │    │ (ComfyUI)  │    │ (ONNX)     │    │           │    │             │    │             │
-│ raw     │    │ ai_        │    │ bg_removed │    │ finalized │    │ spritesheet │    │ characters/ │
-│         │    │ processed  │    │            │    │           │    │             │    │             │
-└────────┘    └────────────┘    └────────────┘    └───────────┘    └─────────────┘    └─────────────┘
-   (1)             (2)               (3)              (4)               (5)               (6)
+┌────────────────────────────────── AI 生成パス（新規）────────────────────────┐
+│  ┌──────────┐    ┌──────────┐    ┌──────────────┐                          │
+│  │ Concept  │ →  │ Direction│ →  │ Animation    │ ──┐                      │
+│  │ (1枚)    │    │ (4方向)  │    │ (フレーム群) │   │                      │
+│  └──────────┘    └──────────┘    └──────────────┘   │                      │
+│     (A1)            (A2)              (A3)           │                      │
+└─────────────────────────────────────────────────────│──────────────────────┘
+                                                       │
+┌──────────────── 従来インポートパス ──────────────────│──────────────────────┐
+│  ┌────────┐    ┌────────────┐                        │                      │
+│  │ Import │ →  │ AI Texture │ ───────────────────────┤                      │
+│  │        │    │ (ComfyUI)  │                        │                      │
+│  │ raw    │    │ ai_        │                        │                      │
+│  │        │    │ processed  │                        │                      │
+│  └────────┘    └────────────┘                        │                      │
+│   (1)              (2)                               │                      │
+└──────────────────────────────────────────────────────│──────────────────────┘
+                                                       │
+               ┌───────────────────────────────────────┘
+               ▼
+┌────────────────────── 共通パイプライン ──────────────────────────────────────┐
+│  ┌────────────┐    ┌───────────┐    ┌─────────────┐    ┌─────────────┐     │
+│  │ BG Removal │ →  │ Normalize │ →  │ Spritesheet │ →  │ Bevy Export │     │
+│  │ (ONNX)     │    │           │    │             │    │             │     │
+│  │ bg_removed │    │ finalized │    │ spritesheet │    │ characters/ │     │
+│  └────────────┘    └───────────┘    └─────────────┘    └─────────────┘     │
+│      (3)              (4)               (5)               (6)               │
+└─────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ### ステータス遷移
 
 ```
-raw ──→ ai_processed ──→ bg_removed ──→ finalized
- │           │                │
- │           │                └──→ finalized (Normalize 直接適用可)
- │           │
- │           └──→ finalized (BG Removal スキップ時)
- │
- └──→ finalized (AI Texture + BG Removal スキップ時)
+                     ┌── AI生成パス ──┐
+                     │                │
+                     ▼                │
+generated ──→ raw ──→ ai_processed ──→ bg_removed ──→ finalized
+                │         │                │
+                │         │                └──→ finalized (Normalize 直接適用可)
+                │         │
+                │         └──→ finalized (BG Removal スキップ時)
+                │
+                └──→ finalized (AI Texture + BG Removal スキップ時)
 ```
 
 スプライトの `status` フィールドは `sprites` テーブルで管理され，各ステージの完了時に更新される．ステージのスキップ（例: AI テクスチャを適用せず直接背景除去）も可能である．
+
+`generated` は AI 生成パスで作成されたスプライトの初期ステータスである．AI 生成の結果をユーザーが確認・承認した時点でステータスが `raw` に遷移し，以降は従来インポートパスと同一の共通パイプラインに入る．これにより，AI 生成スプライトと手動インポートスプライトが同じ後処理フローを共有できる．
 
 **参照ファイル:** `src-tauri/src/models/sprite.rs`（`SpriteStatus` 列挙型）
 
 ---
 
 ## 各ステージの処理詳細
+
+### (A1) Concept -- コンセプト生成
+
+テキストプロンプトからキャラクター原案を1枚生成するステージ．ユーザーが入力したプロンプトに基づき，ピクセルアート風のキャラクターコンセプト画像を生成する．
+
+**生成バックエンド:**
+
+- **ComfyUI（ローカル）:** SDXL + Pixel Art XL LoRA を使用した txt2img ワークフロー
+- **クラウド API:** PixelLab / fal.ai を使用したリモート生成
+
+**出力先:** `{base_path}/{character_name}/concepts/`
+
+**処理フロー:**
+
+1. ユーザーがテキストプロンプト・スタイル設定を入力
+2. 生成バックエンド（ComfyUI またはクラウド API）にリクエストを送信
+3. 生成結果を `concepts/` ディレクトリに保存
+4. ユーザーが結果を確認・選別・リトライ可能
+5. 承認されたコンセプトが (A2) Direction Expansion の入力となる
+
+**参照ファイル:** `docs/architecture/ai-generation.md`
+
+---
+
+### (A2) Direction Expansion -- 方向展開
+
+コンセプト画像から4方向（down，left，right，up）の基本ポーズを生成するステージ．
+
+**生成バックエンド:**
+
+- **ComfyUI（ローカル）:** IP-Adapter（コンセプト画を参照）+ ControlNet（方向別 OpenPose スケルトン）
+- **クラウド API:** PixelLab ワンクリック回転 / fal.ai マルチリファレンス
+
+**出力先:** `{base_path}/{character_name}/generated/`
+
+**一貫性確保の仕組み:**
+
+- Seed 固定 + 同一 IP-Adapter 参照画像の使用により，方向間でキャラクターの外見一貫性を維持
+- ControlNet の方向別 OpenPose スケルトンで正しいポーズ方向を強制
+
+---
+
+### (A3) Animation Expansion -- アニメーション展開
+
+各方向の基本ポーズからアニメーションフレームを生成するステージ．
+
+**生成バックエンド:**
+
+- **ComfyUI（ローカル）:** IP-Adapter + ControlNet，フレーム単位バッチ生成（seed 固定）
+- **クラウド API:** Retro Diffusion アニメーションプリセット
+
+**出力先:** `{base_path}/{character_name}/generated/`
+
+**処理フロー:**
+
+1. 各方向の基本ポーズ画像を参照画像として使用
+2. アニメーション種別（idle，walk，attack 等）ごとにフレームを生成
+3. 生成完了後，`sprites` テーブルに `generated` ステータスで登録
+4. ユーザーが生成結果を確認・承認すると `raw` ステータスに遷移し，共通パイプラインに入る
+
+---
 
 ### (1) Import -- スプライトインポート
 
@@ -67,11 +154,19 @@ raw ──→ ai_processed ──→ bg_removed ──→ finalized
 
 ```
 {base_path}/{character_name}/
-├── raw/              # インポート元画像のコピー
-├── processed/        # 未使用（予約）
-├── bg_removed/       # 背景除去後の画像
-├── normalized/       # 正規化後の画像
-└── spritesheet/      # 生成されたスプライトシート
+├── concepts/             # (A1) コンセプト画像
+│   ├── concept_001.png
+│   └── concept_002.png
+├── generated/            # (A2-A3) AI生成スプライト
+│   ├── warrior_down_idle_00.png
+│   └── ...
+├── raw/                  # (1) インポート元画像
+│   ├── warrior_down_idle_00.png
+│   └── ...
+├── ai_processed/         # (2) ComfyUI 質感変換後
+├── bg_removed/           # (3) 背景除去後
+├── normalized/           # (4) 正規化後
+└── spritesheet/          # (5) スプライトシート
 ```
 
 ---
@@ -373,6 +468,12 @@ ONNX Runtime 上の U2-Net モデルを使用して，スプライト画像の�
 ```
 {base_path}/
 ├── {character_name_1}/
+│   ├── concepts/               # (A1) コンセプト画像
+│   │   ├── concept_001.png
+│   │   └── concept_002.png
+│   ├── generated/              # (A2-A3) AI生成スプライト
+│   │   ├── warrior_down_idle_00.png
+│   │   └── ...
 │   ├── raw/                    # (1) インポートされた元画像
 │   │   ├── warrior_down_idle_00.png
 │   │   ├── warrior_down_idle_01.png
@@ -426,6 +527,9 @@ ONNX Runtime 上の U2-Net モデルを使用して，スプライト画像の�
 
 | イベント名 | 送出元ステージ | ペイロード |
 |-----------|--------------|----------|
+| `concept-generation-progress` | (A1) Concept 生成 | `{ step, candidates_generated, status }` |
+| `direction-generation-progress` | (A2) Direction 展開 | `{ current_direction, total_directions, status }` |
+| `animation-generation-progress` | (A3) Animation 展開 | `{ direction, animation, current_frame, total_frames, status }` |
 | `download-progress` | ONNX モデルダウンロード | `{ downloaded, total, percentage }` |
 | `comfyui-progress` | AI Texture バッチ | `{ current, total, status, current_file }` |
 | `bg-removal-progress` | BG Removal バッチ | `{ current, total, sprite_id }` |

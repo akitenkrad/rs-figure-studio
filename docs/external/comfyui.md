@@ -6,9 +6,12 @@ Figurine Studio は，ComfyUI と連携して AI テクスチャ生成（質感�
 
 ### スプライトパイプラインにおける位置づけ
 
+ComfyUI はスプライトパイプラインの2つの経路で使用される:
+
 ```
-Import (raw) → [AI Texture (ComfyUI)] → BG Removal (ONNX) → Normalize → Spritesheet → Bevy Export
-                ↑ この部分が ComfyUI 連携
+[AI Character Generation (ComfyUI)] ──→ BG Removal (ONNX) → Normalize → Spritesheet → Bevy Export
+Import (raw) → [AI Texture (ComfyUI)] ──→ BG Removal (ONNX) → Normalize → Spritesheet → Bevy Export
+                ↑ 既存の ComfyUI 連携        ↑ 新規: AI キャラクター生成にも ComfyUI を使用
 ```
 
 ### 関連ソースファイル
@@ -387,6 +390,49 @@ history[prompt_id].outputs.{任意のnode_id}.images[0]
   → { filename, subfolder } を取得
   → GET /view で画像データをダウンロード
 ```
+
+---
+
+## AI キャラクター生成ワークフロー（拡張）
+
+ComfyUI は Figurine Studio において以下の2つの用途で使用される:
+
+1. **AI テクスチャ（既存）:** インポート済みスプライトの質感変換（img2img）
+2. **AI キャラクター生成（新規）:** テキストプロンプトからのスプライト素材生成（txt2img + IP-Adapter）
+
+AI キャラクター生成では，コンセプト生成 → 方向展開 → アニメーション展開の3段階でスプライト素材を自動生成する．各段階で専用のワークフローテンプレートを使用する．
+
+### 追加プレースホルダ
+
+既存の8種のプレースホルダに加え，AI キャラクター生成ワークフローで使用する追加プレースホルダを以下に示す．
+
+| プレースホルダ | 型 | 説明 |
+|---|---|---|
+| `{{reference_image}}` | 文字列 | IP-Adapter 参照画像ファイル名 |
+| `{{ipadapter_weight}}` | 数値 | IP-Adapter ウェイト（デフォルト: 0.8） |
+| `{{lora_name}}` | 文字列 | 使用する LoRA モデル名 |
+| `{{lora_weight}}` | 数値 | LoRA ウェイト（デフォルト: 1.0） |
+
+### ワークフローテンプレート
+
+| テンプレート | 用途 | 必要カスタムノード |
+|---|---|---|
+| `concept_generation.json` | txt2img コンセプト生成 | Pixel Art XL LoRA |
+| `direction_expansion.json` | IP-Adapter + ControlNet 方向展開 | ComfyUI_IPAdapter_plus, comfyui_controlnet_aux |
+| `animation_frame.json` | フレーム単位アニメーション生成 | ComfyUI_IPAdapter_plus, comfyui_controlnet_aux |
+| `post_process_pixelart.json` | パレット量子化 + グリッド正規化 | ComfyUI-PixelArt-Detector |
+
+### 必要カスタムノード
+
+AI キャラクター生成機能を利用するには，以下のカスタムノードパッケージを ComfyUI にインストールする必要がある．
+
+| パッケージ | 用途 | URL |
+|---|---|---|
+| ComfyUI_IPAdapter_plus | IP-Adapter によるキャラクター一貫性 | github.com/cubiq/ComfyUI_IPAdapter_plus |
+| comfyui_controlnet_aux | ControlNet 前処理（OpenPose / DWPose） | github.com/Fannovel16/comfyui_controlnet_aux |
+| ComfyUI-PixelArt-Detector | ピクセルアートポスト処理 | github.com/dimtoneff/ComfyUI-PixelArt-Detector |
+
+> **注意:** 既存の AI テクスチャ機能のみを使用する場合，上記カスタムノードのインストールは不要である．AI キャラクター生成機能を使用する場合のみ必要となる．
 
 ---
 

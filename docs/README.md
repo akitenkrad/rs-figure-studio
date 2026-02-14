@@ -12,6 +12,7 @@ Figurine Studio の開発者向けドキュメントハブ．
 |---|---|
 | [アーキテクチャ全体図](architecture/overview.md) | 2プロセスモデル（Frontend ↔ Backend），フロントエンド/バックエンド構成，セキュリティ |
 | [データフロー](architecture/data-flow.md) | スプライトパイプライン（Import → AI Texture → BG Removal → Spritesheet → Bevy Export） |
+| [AI キャラクター生成パイプライン](architecture/ai-generation.md) | 生成 AI によるキャラクター素材生成（コンセプト → 方向展開 → アニメーション展開），技術選定 |
 | [DB 設計](architecture/database.md) | テーブル定義，ER 図，インデックス，マイグレーションの仕組み |
 
 ## 起動シーケンス
@@ -26,6 +27,7 @@ Figurine Studio の開発者向けドキュメントハブ．
 |---|---|
 | [ComfyUI 連携ガイド](external/comfyui.md) | API エンドポイント，ワークフロープレースホルダ，バッチ処理，リトライ戦略 |
 | [ONNX Runtime / U2-Net ガイド](external/onnx-runtime.md) | モデル仕様，推論パイプライン，セッション設定，バッチ処理 |
+| [クラウド AI API 連携ガイド](external/cloud-api.md) | PixelLab / fal.ai / Replicate API 設定，比較，エラーハンドリング |
 
 ## 開発ガイド
 

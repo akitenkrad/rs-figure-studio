@@ -2,7 +2,7 @@
 
 ## 概要
 
-Figurine Studio は Tauri v2 ベースのデスクトップアプリケーションであり，ピクセルアートキャラクターのスプライトパイプラインを提供する．MagicaVoxel レンダリング画像のインポートから，AI テクスチャ生成（ComfyUI），背景除去（ONNX/U2-Net），スプライトシート合成，Bevy Engine 向けエクスポートまでを一貫して処理する．
+Figurine Studio は Tauri v2 ベースのデスクトップアプリケーションであり，ピクセルアートキャラクターのスプライトパイプラインを提供する．生成 AI によるキャラクター原案作成，MagicaVoxel 等からの画像インポート，AI テクスチャ生成（ComfyUI），背景除去（ONNX/U2-Net），スプライトシート合成，Bevy Engine 向けエクスポートまでを一貫して処理する．キャラクター素材の入力として，従来のボクセルレンダリング画像インポートに加え，生成 AI によるテキストからの段階的なスプライト生成パスを備える．
 
 ## 2プロセスモデル
 
@@ -88,6 +88,7 @@ src/routes/
 │   └── [id]/
 │       ├── +layout.svelte              # キャラクタータブレイアウト
 │       ├── +page.svelte                # キャラクター概要
+│       ├── generate/+page.svelte       # AI生成（新規）
 │       ├── import/+page.svelte         # スプライトインポート
 │       ├── process/+page.svelte        # AI処理・背景除去
 │       └── preview/+page.svelte        # プレビュー・エクスポート
@@ -111,6 +112,7 @@ src/lib/stores/
 ├── onnx.svelte.ts          # ONNXモデル状態
 ├── comfyui.svelte.ts       # ComfyUI接続状態
 ├── settings.svelte.ts      # アプリ設定
+├── generation.svelte.ts    # AI生成状態（新規）
 ├── setup.svelte.ts         # 初期セットアップ状態
 └── toast.svelte.ts         # トースト通知
 ```
@@ -143,6 +145,7 @@ export const store = {
 | `spriteApi` | スプライト操作 | `list`, `updateAssignment`, `normalizeBatch`, `generateSpritesheet`, `exportForBevy` |
 | `onnxApi` | ONNX モデル管理 | `checkModel`, `downloadModel`, `initialize`, `removeBackground`, `removeBackgroundBatch` |
 | `comfyuiApi` | ComfyUI 連携 | `checkConnection`, `listWorkflows`, `createWorkflow`, `processBatch` |
+| `generationApi` | AI キャラクター生成 | `generateConcept`, `generateDirections`, `generateAnimationFrames` |
 | `settingsApi` | アプリ設定 | `getAll`, `update` |
 
 **イベントリスナーヘルパー:**
@@ -153,6 +156,9 @@ export const store = {
 | `onProcessingProgress` | `processing-progress` | `ProcessingProgress` |
 | `onComfyUIProgress` | `comfyui-progress` | `ComfyUIProgress` |
 | `onBgRemovalProgress` | `bg-removal-progress` | `BgRemovalProgress` |
+| `onConceptGenerationProgress` | `concept-generation-progress` | `ConceptGenerationProgress` |
+| `onDirectionGenerationProgress` | `direction-generation-progress` | `DirectionGenerationProgress` |
+| `onAnimationGenerationProgress` | `animation-generation-progress` | `AnimationGenerationProgress` |
 
 **参照ファイル:** `src/lib/api/tauri.ts`
 
@@ -184,7 +190,7 @@ export const store = {
 3. `app_data_dir` の取得と `AppState` の生成
 4. 全コマンドハンドラの登録（`generate_handler![]`）
 
-**登録コマンド一覧（11モジュール，24コマンド）:**
+**登録コマンド一覧（11モジュール，24コマンド + AI 生成コマンド追加予定）:**
 
 | モジュール | コマンド数 | 主要コマンド |
 |-----------|-----------|------------|
@@ -245,16 +251,20 @@ pub async fn command_name(
 ```
 src-tauri/src/services/
 ├── mod.rs
-├── onnx_service.rs       # U2-Net背景除去エンジン
-├── comfyui_client.rs     # ComfyUI HTTP/RESTクライアント
-├── filename_parser.rs    # MagicaVoxelファイル名パーサー
-└── path_utils.rs         # パスサニタイズ・検証ユーティリティ
+├── onnx_service.rs           # U2-Net背景除去エンジン
+├── comfyui_client.rs         # ComfyUI HTTP/RESTクライアント
+├── cloud_api_client.rs       # クラウドAI APIクライアント（新規）
+├── generation_backend.rs     # 生成バックエンド抽象レイヤー（新規）
+├── filename_parser.rs        # MagicaVoxelファイル名パーサー
+└── path_utils.rs             # パスサニタイズ・検証ユーティリティ
 ```
 
 | サービス | 責務 | 外部依存 |
 |---------|------|---------|
 | `OnnxService` | U2-Net による背景除去推論 | ort (ONNX Runtime) |
 | `ComfyUIClient` | ComfyUI REST API との通信 | reqwest (HTTP) |
+| `CloudAPIClient` | クラウド AI API との通信（PixelLab / fal.ai / Replicate） | reqwest (HTTP) |
+| `GenerationBackend` | ComfyUI / クラウド API の生成バックエンド抽象 | なし（trait） |
 | `FilenameParser` | `{character}_{direction}_{animation}_{frame}.png` 形式の解析 | なし |
 | `path_utils` | ファイル名サニタイズ，パストラバーサル検証，ディレクトリ作成 | なし |
 
@@ -272,6 +282,7 @@ pub enum AppError {
     Io(String),                 // ファイルI/Oエラー
     Onnx(String),               // ONNXランタイムエラー
     ComfyUI(String),            // ComfyUI連携エラー
+    CloudAPI(String),           // クラウドAPI連携エラー
     ImageProcessing(String),    // 画像処理エラー
     Export(String),             // エクスポートエラー
     Internal(String),           // 予期しない内部エラー
@@ -293,6 +304,7 @@ pub enum AppError {
 | `IO` | `Io` | ファイル読み書きの失敗 |
 | `ONNX` | `Onnx` | ONNX 推論・モデルロードの失敗 |
 | `COMFYUI` | `ComfyUI` | ComfyUI 接続・処理の失敗 |
+| `CLOUD_API` | `CloudAPI` | クラウド API 連携の失敗 |
 | `IMAGE_PROCESSING` | `ImageProcessing` | 画像変換処理の失敗 |
 | `EXPORT` | `Export` | エクスポート処理の失敗 |
 | `INTERNAL` | `Internal` | 予期しないエラー |
@@ -320,6 +332,8 @@ style-src 'self' 'unsafe-inline'
 | `img-src` | `'self' asset: https://asset.localhost` | ローカル画像ファイルの表示用 |
 | `connect-src` | `'self' http://127.0.0.1:8188 ws://127.0.0.1:8188` | ローカル ComfyUI サーバーへの HTTP/WebSocket 接続許可 |
 | `style-src` | `'self' 'unsafe-inline'` | インラインスタイルの許可 |
+
+> **注意（AI 生成パス追加に伴う CSP 更新）:** クラウド AI API（PixelLab / fal.ai / Replicate）を利用する場合，各サービスのエンドポイント URL を `connect-src` に追加する必要がある．バックエンド（Rust プロセス）からの HTTP 通信は CSP の影響を受けないが，フロントエンドから直接 API を呼び出す場合や WebSocket 接続を行う場合は CSP の更新が必須となる．
 
 ### Tauri プラグインスコープ
 
