@@ -35,3 +35,6 @@ thoughts/
 
 # ONNX models
 *.onnx
+
+# ComfyUI models (checkpoints, LoRA etc.)
+src-tauri/models/
