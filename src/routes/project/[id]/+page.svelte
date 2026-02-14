@@ -5,6 +5,7 @@
   import { projectStore } from '$lib/stores/project.svelte';
   import { characterStore } from '$lib/stores/character.svelte';
   import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
+  import { ALL_DIRECTIONS, DIRECTION_SORT_ORDER } from '$lib/types';
 
   const projectId = $derived($page.params.id);
 
@@ -20,9 +21,33 @@
   let editName = $state('');
   let editStylePrompt = $state('');
   let editNegativePrompt = $state('');
+  let editDirections = $state<Set<string>>(new Set());
 
   // Delete confirm
   let showDeleteConfirm = $state(false);
+
+  function parseDirections(dirs: string[] | string): string[] {
+    if (Array.isArray(dirs)) return dirs;
+    try { return JSON.parse(dirs); } catch { return []; }
+  }
+
+  function toggleEditDirection(id: string) {
+    const next = new Set(editDirections);
+    if (next.has(id)) {
+      next.delete(id);
+    } else {
+      next.add(id);
+    }
+    editDirections = next;
+  }
+
+  function setEditPreset4() {
+    editDirections = new Set(['down', 'left', 'right', 'up']);
+  }
+
+  function setEditPreset8() {
+    editDirections = new Set(ALL_DIRECTIONS.map(d => d.id));
+  }
 
   function startEdit() {
     const p = projectStore.currentProject;
@@ -30,6 +55,7 @@
     editName = p.name;
     editStylePrompt = p.style_prompt;
     editNegativePrompt = p.negative_prompt;
+    editDirections = new Set(parseDirections(p.directions));
     editing = true;
   }
 
@@ -38,11 +64,13 @@
   }
 
   async function saveEdit() {
-    if (!editName.trim() || !projectId) return;
+    if (!editName.trim() || !projectId || editDirections.size === 0) return;
+    const sortedDirs = DIRECTION_SORT_ORDER.filter(id => editDirections.has(id));
     await projectStore.updateProject(projectId, {
       name: editName.trim(),
       style_prompt: editStylePrompt.trim(),
       negative_prompt: editNegativePrompt.trim(),
+      directions: sortedDirs,
     });
     editing = false;
   }
@@ -104,6 +132,29 @@
         <label class="label" for="editNegativePrompt">ネガティブプロンプト</label>
         <textarea id="editNegativePrompt" class="textarea" bind:value={editNegativePrompt} rows="2"></textarea>
       </div>
+      <div class="form-group">
+        <!-- svelte-ignore a11y_label_has_associated_control -->
+        <label class="label">方向</label>
+        <div class="direction-presets">
+          <button type="button" class="btn btn-ghost btn-sm" onclick={setEditPreset4}>4方向</button>
+          <button type="button" class="btn btn-ghost btn-sm" onclick={setEditPreset8}>8方向</button>
+        </div>
+        <div class="direction-grid">
+          {#each ALL_DIRECTIONS as dir}
+            <label class="direction-checkbox">
+              <input
+                type="checkbox"
+                checked={editDirections.has(dir.id)}
+                onchange={() => toggleEditDirection(dir.id)}
+              />
+              <span>{dir.label} ({dir.id})</span>
+            </label>
+          {/each}
+        </div>
+        {#if editDirections.size === 0}
+          <p class="error-text">最低1つの方向を選択してください</p>
+        {/if}
+      </div>
     {:else}
       <div class="info-grid">
         <div class="info-item">
@@ -117,6 +168,17 @@
         <div class="info-item">
           <span class="info-label">ControlNet Weight</span>
           <span class="info-value">{project.controlnet_weight}</span>
+        </div>
+        <div class="info-item full-width">
+          <span class="info-label">方向</span>
+          <span class="info-value">
+            <span class="direction-badges">
+              {#each parseDirections(project.directions) as dir}
+                {@const meta = ALL_DIRECTIONS.find(d => d.id === dir)}
+                <span class="direction-badge">{meta ? meta.label : dir}</span>
+              {/each}
+            </span>
+          </span>
         </div>
         {#if project.style_prompt}
           <div class="info-item full-width">
@@ -260,6 +322,61 @@
     font-size: var(--text-sm);
     color: var(--text-primary);
     word-break: break-all;
+  }
+
+  .direction-presets {
+    display: flex;
+    gap: var(--space-2);
+    margin-bottom: var(--space-2);
+  }
+
+  .direction-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: var(--space-2);
+  }
+
+  .direction-checkbox {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    padding: var(--space-2) var(--space-3);
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-default);
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: var(--text-sm);
+    transition: border-color 0.15s;
+  }
+
+  .direction-checkbox:hover {
+    border-color: var(--accent-primary);
+  }
+
+  .direction-checkbox input[type="checkbox"] {
+    accent-color: var(--accent-primary);
+  }
+
+  .direction-badges {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-1);
+  }
+
+  .direction-badge {
+    display: inline-block;
+    padding: var(--space-1) var(--space-2);
+    background: var(--bg-tertiary, var(--bg-secondary));
+    border: 1px solid var(--border-default);
+    border-radius: 4px;
+    font-size: var(--text-xs);
+    font-weight: var(--font-weight-medium);
+  }
+
+  .error-text {
+    margin-top: var(--space-1);
+    font-size: var(--text-xs);
+    color: var(--accent-danger);
   }
 
   .character-section {

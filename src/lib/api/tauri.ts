@@ -33,6 +33,7 @@ import type {
   LoraModel,
   CharacterLora,
   PaletteParams,
+  SavedImages,
 } from '$lib/types';
 
 // --- Project API ---
@@ -200,6 +201,14 @@ export const comfyuiModelApi = {
   async getCheckpointsPath(): Promise<string> {
     return invoke<string>('get_comfyui_checkpoints_path');
   },
+
+  async listCheckpoints(): Promise<string[]> {
+    return invoke<string[]>('list_available_checkpoints');
+  },
+
+  async listLoras(): Promise<string[]> {
+    return invoke<string[]>('list_available_loras');
+  },
 };
 
 // --- Generation API ---
@@ -271,6 +280,29 @@ export const generationApi = {
   async getGenerationState(characterId: string): Promise<GenerationState> {
     return invoke<GenerationState>('get_generation_state', { characterId });
   },
+
+  async clearGenerationStage(
+    characterId: string,
+    stage: string,
+  ): Promise<void> {
+    return invoke('clear_generation_stage', { characterId, stage });
+  },
+
+  async saveGenerationImage(
+    characterId: string,
+    imagePath: string,
+    stage: string,
+  ): Promise<string> {
+    return invoke<string>('save_generation_image', { characterId, imagePath, stage });
+  },
+
+  async getSavedImages(characterId: string): Promise<SavedImages> {
+    return invoke<SavedImages>('get_saved_images', { characterId });
+  },
+
+  async deleteSavedImage(imagePath: string): Promise<void> {
+    return invoke('delete_saved_image', { imagePath });
+  },
 };
 
 // --- LoRA API ---
@@ -330,6 +362,14 @@ export const spriteApi = {
     tileHeight: number,
   ): Promise<void> {
     return invoke('normalize_batch', { characterId, tileWidth, tileHeight });
+  },
+
+  async pixelateSprite(
+    spritePath: string,
+    targetWidth: number,
+    targetHeight: number,
+  ): Promise<string> {
+    return invoke<string>('pixelate_sprite', { spritePath, targetWidth, targetHeight });
   },
 
   async generateSpritesheet(characterId: string): Promise<SpritesheetResult> {

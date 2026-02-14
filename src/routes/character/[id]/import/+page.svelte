@@ -15,8 +15,9 @@
     (() => {
       const p = projectStore.currentProject;
       if (!p?.directions) return [];
+      if (Array.isArray(p.directions)) return p.directions as string[];
       try {
-        return JSON.parse(p.directions) as string[];
+        return JSON.parse(p.directions as string) as string[];
       } catch {
         return [];
       }
@@ -27,8 +28,9 @@
     (() => {
       const p = projectStore.currentProject;
       if (!p?.animations) return [];
+      if (Array.isArray(p.animations)) return p.animations as { name: string; frame_count: number }[];
       try {
-        return JSON.parse(p.animations) as { name: string; frame_count: number }[];
+        return JSON.parse(p.animations as string) as { name: string; frame_count: number }[];
       } catch {
         return [];
       }

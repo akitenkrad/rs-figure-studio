@@ -1,4 +1,4 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri::Emitter;
 
 use crate::db;
@@ -619,6 +619,150 @@ pub async fn test_cloud_api_connection(
 }
 
 // ============================================================
+// ステージクリア（やり直し）
+// ============================================================
+
+/// 指定ステージの生成結果をクリアする
+///
+/// ステージに応じてファイルを削除し，DB レコードも更新する．
+/// - `concept_art` → concept_art/ ディレクトリ内のファイルを削除
+/// - `concept` → concepts/ ディレクトリ内のファイルを削除し，character.concept_image_path を NULL に
+/// - `direction` → generated/ 内の方向ベース画像と，sprites テーブルの該当レコードを削除
+/// - `animation` → generated/ 内のアニメーションフレームと，sprites テーブルの該当レコードを削除
+#[tauri::command]
+pub async fn clear_generation_stage(
+    state: tauri::State<'_, AppState>,
+    character_id: String,
+    stage: String,
+) -> Result<(), AppError> {
+    let (character, project) = {
+        let conn = state
+            .db
+            .lock()
+            .map_err(|e| AppError::Internal(e.to_string()))?;
+
+        let character = db::queries::character::get_character(&conn, &character_id)?
+            .ok_or_else(|| AppError::NotFound("キャラクターが見つかりません".into()))?;
+        let project = db::queries::project::get_project(&conn, &character.project_id)?
+            .ok_or_else(|| AppError::Internal("プロジェクトが見つかりません".into()))?;
+
+        (character, project)
+    };
+
+    let base = std::path::Path::new(&project.base_path).join(&character.name);
+
+    match stage.as_str() {
+        "concept_art" => {
+            // concept_art/ ディレクトリ内のファイルをすべて削除
+            let dir = base.join("concept_art");
+            if dir.exists() {
+                if let Ok(entries) = std::fs::read_dir(&dir) {
+                    for entry in entries.filter_map(|e| e.ok()) {
+                        let path = entry.path();
+                        if path.is_file() {
+                            let _ = std::fs::remove_file(&path);
+                        }
+                    }
+                }
+            }
+        }
+        "concept" => {
+            // concepts/ ディレクトリ内のファイルをすべて削除
+            let dir = base.join("concepts");
+            if dir.exists() {
+                if let Ok(entries) = std::fs::read_dir(&dir) {
+                    for entry in entries.filter_map(|e| e.ok()) {
+                        let path = entry.path();
+                        if path.is_file() {
+                            let _ = std::fs::remove_file(&path);
+                        }
+                    }
+                }
+            }
+
+            // character.concept_image_path を NULL に設定
+            let conn = state
+                .db
+                .lock()
+                .map_err(|e| AppError::Internal(e.to_string()))?;
+            conn.execute(
+                "UPDATE characters SET concept_image_path = NULL, updated_at = ?1 WHERE id = ?2",
+                rusqlite::params![chrono::Utc::now().to_rfc3339(), character_id],
+            )
+            .map_err(|e| AppError::Database(e.to_string()))?;
+        }
+        "direction" => {
+            // generated/ 内の方向ベース画像（*_base.png）を削除
+            let dir = base.join("generated");
+            if dir.exists() {
+                if let Ok(entries) = std::fs::read_dir(&dir) {
+                    for entry in entries.filter_map(|e| e.ok()) {
+                        let path = entry.path();
+                        if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                            if name.ends_with("_base.png") {
+                                let _ = std::fs::remove_file(&path);
+                            }
+                        }
+                    }
+                }
+            }
+
+            // sprites テーブルから generated ステータスで animation="base" のレコードを削除
+            let conn = state
+                .db
+                .lock()
+                .map_err(|e| AppError::Internal(e.to_string()))?;
+            conn.execute(
+                "DELETE FROM sprites WHERE character_id = ?1 AND status = 'generated' AND animation = 'base'",
+                rusqlite::params![character_id],
+            )
+            .map_err(|e| AppError::Database(e.to_string()))?;
+        }
+        "animation" => {
+            // generated/ 内のアニメーションフレーム（*_frame_*.png）を削除
+            let dir = base.join("generated");
+            if dir.exists() {
+                if let Ok(entries) = std::fs::read_dir(&dir) {
+                    for entry in entries.filter_map(|e| e.ok()) {
+                        let path = entry.path();
+                        if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                            if name.contains("_frame_") {
+                                let _ = std::fs::remove_file(&path);
+                            }
+                        }
+                    }
+                }
+            }
+
+            // sprites テーブルから generated ステータスで animation!="base" のレコードを削除
+            let conn = state
+                .db
+                .lock()
+                .map_err(|e| AppError::Internal(e.to_string()))?;
+            conn.execute(
+                "DELETE FROM sprites WHERE character_id = ?1 AND status = 'generated' AND animation != 'base'",
+                rusqlite::params![character_id],
+            )
+            .map_err(|e| AppError::Database(e.to_string()))?;
+        }
+        _ => {
+            return Err(AppError::Validation(format!(
+                "不正なステージ名です: {}",
+                stage
+            )));
+        }
+    }
+
+    log::info!(
+        "ステージクリア完了: stage={}, character={}",
+        stage,
+        character.name
+    );
+
+    Ok(())
+}
+
+// ============================================================
 // 生成パイプライン状態復元
 // ============================================================
 
@@ -777,4 +921,169 @@ pub async fn get_generation_state(
         animation_frames,
         stage,
     })
+}
+
+// ============================================================
+// 画像保存（お気に入り / ブックマーク）
+// ============================================================
+
+/// 保存済み画像の一覧
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SavedImages {
+    pub concept_art: Vec<String>,
+    pub pixel_art: Vec<String>,
+    pub direction: Vec<String>,
+    pub animation: Vec<String>,
+}
+
+/// 生成画像をプロジェクトに保存する
+///
+/// 指定された画像ファイルを `{base_path}/{character_name}/saved/{stage}/` にコピーする．
+/// 同名ファイルが既に存在する場合はそのまま既存パスを返す（冪等）．
+#[tauri::command]
+pub async fn save_generation_image(
+    state: tauri::State<'_, AppState>,
+    character_id: String,
+    image_path: String,
+    stage: String,
+) -> Result<String, AppError> {
+    // ステージ名のバリデーション
+    match stage.as_str() {
+        "concept_art" | "pixel_art" | "direction" | "animation" => {}
+        _ => {
+            return Err(AppError::Validation(format!(
+                "不正なステージ名です: {}",
+                stage
+            )));
+        }
+    }
+
+    // キャラクター・プロジェクト情報取得
+    let (character, project) = {
+        let conn = state
+            .db
+            .lock()
+            .map_err(|e| AppError::Internal(e.to_string()))?;
+
+        let character = db::queries::character::get_character(&conn, &character_id)?
+            .ok_or_else(|| AppError::NotFound("キャラクターが見つかりません".into()))?;
+        let project = db::queries::project::get_project(&conn, &character.project_id)?
+            .ok_or_else(|| AppError::Internal("プロジェクトが見つかりません".into()))?;
+
+        (character, project)
+    };
+
+    // 保存先ディレクトリを作成
+    let saved_dir = std::path::Path::new(&project.base_path)
+        .join(&character.name)
+        .join("saved")
+        .join(&stage);
+    std::fs::create_dir_all(&saved_dir)
+        .map_err(|e| AppError::Io(format!("保存ディレクトリの作成に失敗: {}", e)))?;
+
+    // ソースファイルの確認
+    let src = std::path::Path::new(&image_path);
+    if !src.exists() {
+        return Err(AppError::Io(format!(
+            "保存元ファイルが見つかりません: {}",
+            image_path
+        )));
+    }
+
+    let filename = src
+        .file_name()
+        .ok_or_else(|| AppError::Internal("無効なファイルパス".into()))?;
+    let dest = saved_dir.join(filename);
+
+    // 冪等: 既にコピー済みならそのまま返す
+    if !dest.exists() {
+        std::fs::copy(src, &dest)
+            .map_err(|e| AppError::Io(format!("ファイルコピーに失敗: {}", e)))?;
+    }
+
+    let saved_path = dest.to_string_lossy().to_string();
+    log::info!("画像を保存しました: {} (stage: {})", saved_path, stage);
+
+    Ok(saved_path)
+}
+
+/// キャラクターの保存済み画像一覧を取得する
+///
+/// `{base_path}/{character_name}/saved/` 配下のサブディレクトリを走査し，
+/// ステージ別に絶対パスの一覧を返す．
+#[tauri::command]
+pub async fn get_saved_images(
+    state: tauri::State<'_, AppState>,
+    character_id: String,
+) -> Result<SavedImages, AppError> {
+    let (character, project) = {
+        let conn = state
+            .db
+            .lock()
+            .map_err(|e| AppError::Internal(e.to_string()))?;
+
+        let character = db::queries::character::get_character(&conn, &character_id)?
+            .ok_or_else(|| AppError::NotFound("キャラクターが見つかりません".into()))?;
+        let project = db::queries::project::get_project(&conn, &character.project_id)?
+            .ok_or_else(|| AppError::Internal("プロジェクトが見つかりません".into()))?;
+
+        (character, project)
+    };
+
+    let saved_base = std::path::Path::new(&project.base_path)
+        .join(&character.name)
+        .join("saved");
+
+    let scan_stage = |stage_name: &str| -> Vec<String> {
+        let dir = saved_base.join(stage_name);
+        if !dir.exists() {
+            return Vec::new();
+        }
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            return Vec::new();
+        };
+        let mut paths: Vec<String> = entries
+            .filter_map(|e| e.ok())
+            .filter(|e| {
+                e.path()
+                    .extension()
+                    .map(|ext| ext == "png" || ext == "jpg" || ext == "jpeg")
+                    .unwrap_or(false)
+            })
+            .map(|e| e.path().to_string_lossy().to_string())
+            .collect();
+        paths.sort();
+        paths
+    };
+
+    Ok(SavedImages {
+        concept_art: scan_stage("concept_art"),
+        pixel_art: scan_stage("pixel_art"),
+        direction: scan_stage("direction"),
+        animation: scan_stage("animation"),
+    })
+}
+
+/// 保存済み画像を削除する
+///
+/// 安全チェックとして，パスに "/saved/" が含まれていることを確認してから削除する．
+#[tauri::command]
+pub async fn delete_saved_image(image_path: String) -> Result<(), AppError> {
+    // 安全チェック: "/saved/" を含むパスのみ削除を許可
+    if !image_path.contains("/saved/") {
+        return Err(AppError::Validation(
+            "保存済み画像のパスではありません．削除できるのは saved/ ディレクトリ内のファイルのみです．"
+                .into(),
+        ));
+    }
+
+    let path = std::path::Path::new(&image_path);
+    if path.exists() {
+        std::fs::remove_file(path)
+            .map_err(|e| AppError::Io(format!("ファイル削除に失敗: {}", e)))?;
+    }
+
+    log::info!("保存済み画像を削除しました: {}", image_path);
+
+    Ok(())
 }

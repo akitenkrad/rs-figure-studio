@@ -208,3 +208,79 @@ pub async fn get_comfyui_checkpoints_path(
 
     Ok(path)
 }
+
+/// ComfyUI で利用可能なチェックポイント一覧を取得
+#[tauri::command]
+pub async fn list_available_checkpoints(
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<String>, AppError> {
+    let endpoint = {
+        let conn = state
+            .db
+            .lock()
+            .map_err(|e| AppError::Internal(e.to_string()))?;
+        db::queries::settings::get_setting(&conn, "comfyui_endpoint")?
+            .unwrap_or_else(|| "http://127.0.0.1:8188".to_string())
+    };
+
+    let client = ComfyUIClient::new(&endpoint);
+
+    let info = client
+        .get_object_info("CheckpointLoaderSimple")
+        .await
+        .map_err(|e| AppError::ComfyUI(format!("チェックポイント一覧の取得に失敗: {}", e)))?;
+
+    let checkpoints = info
+        .get("CheckpointLoaderSimple")
+        .and_then(|node| node.get("input"))
+        .and_then(|input| input.get("required"))
+        .and_then(|req| req.get("ckpt_name"))
+        .and_then(|ckpt| ckpt.get(0))
+        .and_then(|list| list.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect::<Vec<String>>()
+        })
+        .unwrap_or_default();
+
+    Ok(checkpoints)
+}
+
+/// ComfyUI で利用可能な LoRA 一覧を取得
+#[tauri::command]
+pub async fn list_available_loras(
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<String>, AppError> {
+    let endpoint = {
+        let conn = state
+            .db
+            .lock()
+            .map_err(|e| AppError::Internal(e.to_string()))?;
+        db::queries::settings::get_setting(&conn, "comfyui_endpoint")?
+            .unwrap_or_else(|| "http://127.0.0.1:8188".to_string())
+    };
+
+    let client = ComfyUIClient::new(&endpoint);
+
+    let info = client
+        .get_object_info("LoraLoader")
+        .await
+        .map_err(|e| AppError::ComfyUI(format!("LoRA 一覧の取得に失敗: {}", e)))?;
+
+    let loras = info
+        .get("LoraLoader")
+        .and_then(|node| node.get("input"))
+        .and_then(|input| input.get("required"))
+        .and_then(|req| req.get("lora_name"))
+        .and_then(|lora| lora.get(0))
+        .and_then(|list| list.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect::<Vec<String>>()
+        })
+        .unwrap_or_default();
+
+    Ok(loras)
+}

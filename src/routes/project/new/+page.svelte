@@ -3,6 +3,7 @@
   import { FolderOpen } from 'lucide-svelte';
   import { projectStore } from '$lib/stores/project.svelte';
   import Breadcrumb from '$lib/components/Breadcrumb.svelte';
+  import { ALL_DIRECTIONS, DIRECTION_SORT_ORDER } from '$lib/types';
   import type { CreateProject, AnimationDef } from '$lib/types';
 
   const breadcrumbItems = [
@@ -21,8 +22,31 @@
   let submitting = $state(false);
   let errors = $state<Record<string, string>>({});
 
-  // Default directions
-  const directions = ['down', 'left', 'right', 'up'];
+  // Directions (reactive, default to 4-direction)
+  let selectedDirections = $state<Set<string>>(new Set(['down', 'left', 'right', 'up']));
+
+  function toggleDirection(id: string) {
+    const next = new Set(selectedDirections);
+    if (next.has(id)) {
+      next.delete(id);
+    } else {
+      next.add(id);
+    }
+    selectedDirections = next;
+  }
+
+  function setPreset4() {
+    selectedDirections = new Set(['down', 'left', 'right', 'up']);
+  }
+
+  function setPreset8() {
+    selectedDirections = new Set(ALL_DIRECTIONS.map(d => d.id));
+  }
+
+  // Sort selected directions by canonical order for submission
+  const sortedDirections = $derived(
+    DIRECTION_SORT_ORDER.filter(id => selectedDirections.has(id))
+  );
 
   // Default animations
   let animations = $state<AnimationDef[]>([
@@ -56,6 +80,7 @@
     if (!basePath.trim()) newErrors.basePath = 'ベースパスを選択してください';
     if (tileWidth < 8 || tileWidth > 512) newErrors.tileWidth = 'タイルサイズは8~512pxの範囲で指定してください';
     if (tileHeight < 8 || tileHeight > 512) newErrors.tileHeight = 'タイルサイズは8~512pxの範囲で指定してください';
+    if (selectedDirections.size === 0) newErrors.directions = '最低1つの方向を選択してください';
     if (animations.some(a => !a.name.trim())) newErrors.animations = 'アニメーション名を入力してください';
     if (animations.some(a => a.frame_count < 1 || a.frame_count > 32))
       newErrors.animations = 'フレーム数は1〜32の範囲で指定してください';
@@ -74,7 +99,7 @@
       base_path: basePath.trim(),
       tile_width: tileWidth,
       tile_height: tileHeight,
-      directions,
+      directions: sortedDirections,
       animations,
       style_prompt: stylePrompt.trim(),
       negative_prompt: negativePrompt.trim(),
@@ -169,6 +194,31 @@
           <p class="error-text">{errors.tileHeight}</p>
         {/if}
       </div>
+    </div>
+
+    <!-- Directions -->
+    <div class="form-group">
+      <!-- svelte-ignore a11y_label_has_associated_control -->
+      <label class="label">方向 <span class="required">*</span></label>
+      <div class="direction-presets">
+        <button type="button" class="btn btn-ghost btn-sm" onclick={setPreset4}>4方向</button>
+        <button type="button" class="btn btn-ghost btn-sm" onclick={setPreset8}>8方向</button>
+      </div>
+      <div class="direction-grid">
+        {#each ALL_DIRECTIONS as dir}
+          <label class="direction-checkbox">
+            <input
+              type="checkbox"
+              checked={selectedDirections.has(dir.id)}
+              onchange={() => toggleDirection(dir.id)}
+            />
+            <span>{dir.label} ({dir.id})</span>
+          </label>
+        {/each}
+      </div>
+      {#if errors.directions}
+        <p class="error-text">{errors.directions}</p>
+      {/if}
     </div>
 
     <!-- Animations -->
@@ -310,6 +360,39 @@
     margin-top: var(--space-1);
     font-size: var(--text-xs);
     color: var(--accent-danger);
+  }
+
+  .direction-presets {
+    display: flex;
+    gap: var(--space-2);
+    margin-bottom: var(--space-2);
+  }
+
+  .direction-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: var(--space-2);
+  }
+
+  .direction-checkbox {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    padding: var(--space-2) var(--space-3);
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-default);
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: var(--text-sm);
+    transition: border-color 0.15s;
+  }
+
+  .direction-checkbox:hover {
+    border-color: var(--accent-primary);
+  }
+
+  .direction-checkbox input[type="checkbox"] {
+    accent-color: var(--accent-primary);
   }
 
   .animation-list {

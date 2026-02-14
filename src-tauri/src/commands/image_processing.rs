@@ -5,6 +5,57 @@ use crate::error::AppError;
 use crate::models::{SpriteStatus, UpdateSpritePaths};
 use crate::state::AppState;
 
+/// ピクセルグリッド整合化
+///
+/// nearest-neighbor ダウンスケール → アップスケールでピクセルグリッドを強制整合する．
+/// mixel（ピクセルサイズの不一致）を解消する後処理として使用．
+pub fn pixelate_image(img: &image::RgbaImage, target_w: u32, target_h: u32) -> image::RgbaImage {
+    let (orig_w, orig_h) = img.dimensions();
+    let small = image::imageops::resize(
+        img,
+        target_w.max(1),
+        target_h.max(1),
+        image::imageops::FilterType::Nearest,
+    );
+    image::imageops::resize(&small, orig_w, orig_h, image::imageops::FilterType::Nearest)
+}
+
+/// スプライト画像にピクセルグリッド整合化を適用
+///
+/// 指定されたパスの画像を読み込み，ピクセルグリッドに整合させて上書き保存する．
+#[tauri::command]
+pub async fn pixelate_sprite(
+    sprite_path: String,
+    target_width: u32,
+    target_height: u32,
+) -> Result<String, AppError> {
+    let path = std::path::Path::new(&sprite_path);
+    if !path.exists() {
+        return Err(AppError::NotFound(format!(
+            "画像ファイルが見つかりません: {}",
+            sprite_path
+        )));
+    }
+
+    let img = image::open(path)
+        .map_err(|e| AppError::ImageProcessing(format!("画像を開けません: {}", e)))?
+        .to_rgba8();
+
+    let pixelated = pixelate_image(&img, target_width, target_height);
+    pixelated
+        .save(path)
+        .map_err(|e| AppError::ImageProcessing(format!("画像の保存に失敗: {}", e)))?;
+
+    log::info!(
+        "ピクセルグリッド整合化を適用: {} ({}x{})",
+        sprite_path,
+        target_width,
+        target_height
+    );
+
+    Ok(sprite_path)
+}
+
 /// Bounding Box（不透明領域の最小矩形）
 #[derive(Debug, Clone)]
 struct BoundingBox {
@@ -525,4 +576,53 @@ fn reduce_palette(
     }
 
     output
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_pixelate_preserves_dimensions() {
+        // Create a 256x256 test image
+        let img = image::RgbaImage::new(256, 256);
+        let result = pixelate_image(&img, 32, 32);
+        assert_eq!(result.dimensions(), (256, 256));
+    }
+
+    #[test]
+    fn test_pixelate_grid_pattern() {
+        // Create a gradient image, pixelate to 4x4 grid on 16x16 image
+        let mut img = image::RgbaImage::new(16, 16);
+        for y in 0..16u32 {
+            for x in 0..16u32 {
+                img.put_pixel(x, y, image::Rgba([x as u8 * 16, y as u8 * 16, 0, 255]));
+            }
+        }
+        let result = pixelate_image(&img, 4, 4);
+        // Pixels within same 4x4 block should be identical
+        let p00 = result.get_pixel(0, 0);
+        let p10 = result.get_pixel(1, 0);
+        let p30 = result.get_pixel(3, 0);
+        assert_eq!(p00, p10);
+        assert_eq!(p00, p30);
+        // Different blocks should differ
+        let p40 = result.get_pixel(4, 0);
+        assert_ne!(p00, p40);
+    }
+
+    #[test]
+    fn test_pixelate_non_square() {
+        let img = image::RgbaImage::new(128, 64);
+        let result = pixelate_image(&img, 16, 8);
+        assert_eq!(result.dimensions(), (128, 64));
+    }
+
+    #[test]
+    fn test_pixelate_min_size() {
+        // target_w or target_h of 0 should be clamped to 1
+        let img = image::RgbaImage::new(64, 64);
+        let result = pixelate_image(&img, 0, 0);
+        assert_eq!(result.dimensions(), (64, 64));
+    }
 }

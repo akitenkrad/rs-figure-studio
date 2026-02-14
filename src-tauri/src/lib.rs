@@ -46,6 +46,7 @@ pub fn run() {
             commands::image_processing::normalize_sprite,
             commands::image_processing::normalize_batch,
             commands::image_processing::normalize_palette,
+            commands::image_processing::pixelate_sprite,
             // Model Download
             commands::model_download::check_onnx_model,
             commands::model_download::download_onnx_model,
@@ -70,6 +71,8 @@ pub fn run() {
             commands::comfyui_model::check_comfyui_model,
             commands::comfyui_model::download_comfyui_model,
             commands::comfyui_model::get_comfyui_checkpoints_path,
+            commands::comfyui_model::list_available_checkpoints,
+            commands::comfyui_model::list_available_loras,
             // Settings
             commands::settings_commands::get_settings,
             commands::settings_commands::update_setting,
@@ -85,6 +88,10 @@ pub fn run() {
             commands::generation::promote_generated_to_raw,
             commands::generation::test_cloud_api_connection,
             commands::generation::get_generation_state,
+            commands::generation::clear_generation_stage,
+            commands::generation::save_generation_image,
+            commands::generation::get_saved_images,
+            commands::generation::delete_saved_image,
             // LoRA
             commands::lora::import_lora,
             commands::lora::list_loras,

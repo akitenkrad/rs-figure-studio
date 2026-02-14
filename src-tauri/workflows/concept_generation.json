@@ -8,7 +8,7 @@
       "sampler_name": "euler",
       "scheduler": "normal",
       "denoise": 1.0,
-      "model": ["4", 0],
+      "model": ["10", 0],
       "positive": ["6", 0],
       "negative": ["7", 0],
       "latent_image": ["5", 0]
@@ -17,7 +17,7 @@
   "4": {
     "class_type": "CheckpointLoaderSimple",
     "inputs": {
-      "ckpt_name": "sd_xl_base_1.0.safetensors"
+      "ckpt_name": "{{checkpoint_name}}"
     }
   },
   "5": {
@@ -32,14 +32,14 @@
     "class_type": "CLIPTextEncode",
     "inputs": {
       "text": "{{positive_prompt}}, pixel art style, game character sprite, clean lines, transparent background",
-      "clip": ["4", 1]
+      "clip": ["10", 1]
     }
   },
   "7": {
     "class_type": "CLIPTextEncode",
     "inputs": {
       "text": "{{negative_prompt}}, blurry, realistic, photo, 3d render, watermark, text",
-      "clip": ["4", 1]
+      "clip": ["10", 1]
     }
   },
   "8": {
@@ -54,6 +54,16 @@
     "inputs": {
       "filename_prefix": "concept",
       "images": ["8", 0]
+    }
+  },
+  "10": {
+    "class_type": "LoraLoader",
+    "inputs": {
+      "lora_name": "{{lora_name}}",
+      "strength_model": "{{lora_strength_model}}",
+      "strength_clip": "{{lora_strength_clip}}",
+      "model": ["4", 0],
+      "clip": ["4", 1]
     }
   }
 }

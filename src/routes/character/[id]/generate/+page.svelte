@@ -8,6 +8,7 @@
     ChevronRight,
     Check,
     RefreshCw,
+    RotateCcw,
     Wand2,
     Palette,
     Compass,
@@ -18,6 +19,8 @@
     Info,
     ChevronDown,
     ChevronUp,
+    Heart,
+    X,
   } from 'lucide-svelte';
   import { characterStore } from '$lib/stores/character.svelte';
   import { projectStore } from '$lib/stores/project.svelte';
@@ -39,11 +42,14 @@
   const characterId = $derived($page.params.id);
 
   // --- Parse project config ---
+  // Rust の Project.directions は Vec<String> なので，Tauri invoke() 経由で既に配列として届く．
+  // ただし DB には JSON 文字列で保存されるため，string の場合は JSON.parse する．
   const projectDirections = $derived((() => {
     const p = projectStore.currentProject;
     if (!p?.directions) return [] as string[];
+    if (Array.isArray(p.directions)) return p.directions as string[];
     try {
-      return JSON.parse(p.directions) as string[];
+      return JSON.parse(p.directions as string) as string[];
     } catch {
       return [] as string[];
     }
@@ -52,8 +58,9 @@
   const projectAnimations = $derived((() => {
     const p = projectStore.currentProject;
     if (!p?.animations) return [] as AnimationDef[];
+    if (Array.isArray(p.animations)) return p.animations as AnimationDef[];
     try {
-      return JSON.parse(p.animations) as AnimationDef[];
+      return JSON.parse(p.animations as string) as AnimationDef[];
     } catch {
       return [] as AnimationDef[];
     }
@@ -175,6 +182,14 @@
     { key: 'completed' as const, label: '完了', icon: Check },
   ];
 
+  const stageOrder = ['idle', 'concept_art', 'concept', 'direction', 'animation', 'completed'] as const;
+
+  function stageReached(target: string): boolean {
+    const currentIdx = stageOrder.indexOf(generationStore.stage as typeof stageOrder[number]);
+    const targetIdx = stageOrder.indexOf(target as typeof stageOrder[number]);
+    return currentIdx >= targetIdx;
+  }
+
   const stageIndex = $derived(
     (() => {
       const s = generationStore.stage;
@@ -182,6 +197,23 @@
       return stages.findIndex((st) => st.key === s);
     })(),
   );
+
+  // --- Model Selection ---
+  let selectedCheckpoint = $state<string | undefined>(undefined);
+  let selectedLora = $state<string | undefined>(undefined);
+  let loraStrength = $state(1.0);
+
+  // Fetch available checkpoints/loras on mount if empty
+  $effect(() => {
+    if (comfyuiChecked && comfyuiStore.isConnected) {
+      if (generationStore.availableCheckpoints.length === 0) {
+        generationStore.fetchCheckpoints();
+      }
+      if (generationStore.availableLoras.length === 0) {
+        generationStore.fetchLoras();
+      }
+    }
+  });
 
   // --- Concept Params ---
   let conceptPrompt = $state('');
@@ -209,6 +241,8 @@
   let ipadapterWeight = $state(0.8);
   let directionSteps = $state(20);
   let directionCfgScale = $state(7);
+  let useControlnet = $state(false);
+  let controlnetStrength = $state(0.5);
 
   // --- Animation Params ---
   let selectedDirection = $state<string | null>(null);
@@ -216,6 +250,18 @@
   let animIpadapterWeight = $state(0.8);
   let animSteps = $state(20);
   let animCfgScale = $state(7);
+  let useKeyframeInterpolation = $state(false);
+  let keyframeIndices = $state<boolean[]>([]);
+  let interpolationMethod = $state('crossfade');
+
+  // Reset keyframe indices when animation changes
+  const selectedAnimDef = $derived(projectAnimations.find((a) => a.name === selectedAnimation));
+  $effect(() => {
+    const frameCount = selectedAnimDef?.frame_count ?? 0;
+    if (frameCount > 0 && keyframeIndices.length !== frameCount) {
+      keyframeIndices = Array(frameCount).fill(false);
+    }
+  });
 
   // --- Handlers ---
   async function handleGenerateConceptArt() {
@@ -227,6 +273,10 @@
       num_candidates: conceptCandidates,
       steps: conceptSteps,
       cfg_scale: conceptCfgScale,
+      checkpoint_name: selectedCheckpoint,
+      lora_name: selectedLora,
+      lora_strength_model: selectedLora ? loraStrength : undefined,
+      lora_strength_clip: selectedLora ? loraStrength : undefined,
     };
 
     await generationStore.generateConceptArt(characterId, params);
@@ -242,6 +292,10 @@
       num_candidates: pixelCandidates,
       steps: pixelSteps,
       cfg_scale: pixelCfgScale,
+      checkpoint_name: selectedCheckpoint,
+      lora_name: selectedLora,
+      lora_strength_model: selectedLora ? loraStrength : undefined,
+      lora_strength_clip: selectedLora ? loraStrength : undefined,
     };
 
     await generationStore.convertToPixelArt(characterId, params);
@@ -255,6 +309,9 @@
       ipadapter_weight: ipadapterWeight,
       steps: directionSteps,
       cfg_scale: directionCfgScale,
+      checkpoint_name: selectedCheckpoint,
+      use_controlnet: useControlnet ? true : undefined,
+      controlnet_strength: useControlnet ? controlnetStrength : undefined,
     };
 
     await generationStore.generateDirections(characterId, params);
@@ -271,12 +328,22 @@
     const animDef = projectAnimations.find((a) => a.name === selectedAnimation);
     if (!animDef) return;
 
+    const selectedKeyframes = useKeyframeInterpolation
+      ? keyframeIndices.reduce<number[]>((acc, checked, idx) => {
+          if (checked) acc.push(idx);
+          return acc;
+        }, [])
+      : undefined;
+
     const params: AnimationParams = {
       animation_name: animDef.name,
       frame_count: animDef.frame_count,
       ipadapter_weight: animIpadapterWeight,
       steps: animSteps,
       cfg_scale: animCfgScale,
+      checkpoint_name: selectedCheckpoint,
+      keyframes: selectedKeyframes,
+      interpolation: useKeyframeInterpolation ? interpolationMethod : undefined,
     };
 
     await generationStore.generateAnimationFrames(
@@ -307,6 +374,48 @@
 
   function handleReset() {
     generationStore.reset();
+  }
+
+  async function handleResetToIdle() {
+    if (!characterId) return;
+    await generationStore.resetToIdle(characterId);
+  }
+
+  async function handleResetToConceptArt() {
+    if (!characterId) return;
+    await generationStore.resetToConceptArt(characterId);
+  }
+
+  async function handleResetToPixelArt() {
+    if (!characterId) return;
+    await generationStore.resetToPixelArt(characterId);
+  }
+
+  async function handleResetToDirection() {
+    if (!characterId) return;
+    await generationStore.resetToDirection(characterId);
+  }
+
+  // --- Save / Bookmark ---
+  async function handleSaveImage(imagePath: string, stage: string) {
+    if (!characterId) return;
+    if (isSavedImage(imagePath, stage)) return;
+    await generationStore.saveImage(characterId, imagePath, stage);
+  }
+
+  async function handleDeleteSaved(imagePath: string) {
+    if (!characterId) return;
+    await generationStore.deleteSavedImage(characterId, imagePath);
+  }
+
+  function isSavedImage(imagePath: string, stage: string): boolean {
+    const filename = imagePath.split('/').pop() || '';
+    const savedList =
+      stage === 'concept_art' ? generationStore.savedImages.concept_art
+      : stage === 'pixel_art' ? generationStore.savedImages.pixel_art
+      : stage === 'direction' ? generationStore.savedImages.direction
+      : generationStore.savedImages.animation;
+    return savedList.some((p) => p.endsWith(filename));
   }
 </script>
 
@@ -445,6 +554,67 @@
     {/if}
   {/if}
 
+  <!-- Model Selection -->
+  {#if comfyuiChecked && comfyuiStore.isConnected}
+    <section class="stage-section model-selection-section">
+      <h2>モデル選択</h2>
+      <p class="stage-description">
+        全ステージで使用するチェックポイントと LoRA を選択します．未選択の場合はデフォルトが使用されます．
+      </p>
+
+      <div class="params-grid">
+        <div class="param-item">
+          <label class="label" for="checkpoint-select">チェックポイント選択</label>
+          <select
+            id="checkpoint-select"
+            class="select"
+            bind:value={selectedCheckpoint}
+            disabled={generationStore.loading}
+          >
+            <option value={undefined}>デフォルト</option>
+            {#each generationStore.availableCheckpoints as ckpt}
+              <option value={ckpt}>{ckpt}</option>
+            {/each}
+          </select>
+        </div>
+
+        <div class="param-item">
+          <label class="label" for="lora-select">LoRA 選択</label>
+          <select
+            id="lora-select"
+            class="select"
+            bind:value={selectedLora}
+            disabled={generationStore.loading}
+          >
+            <option value={undefined}>なし</option>
+            {#each generationStore.availableLoras as lora}
+              <option value={lora}>{lora}</option>
+            {/each}
+          </select>
+        </div>
+
+        {#if selectedLora}
+          <div class="param-item">
+            <label class="label" for="lora-strength">
+              LoRA 強度
+              <span class="param-value">{loraStrength.toFixed(1)}</span>
+            </label>
+            <input
+              id="lora-strength"
+              type="range"
+              class="slider"
+              min="0"
+              max="2"
+              step="0.1"
+              bind:value={loraStrength}
+              disabled={generationStore.loading}
+            />
+          </div>
+        {/if}
+      </div>
+    </section>
+  {/if}
+
   <!-- Progress Bar (during any generation) -->
   {#if generationStore.loading && generationStore.progress}
     <div class="generation-progress">
@@ -469,9 +639,16 @@
   {/if}
 
   <!-- ===== Stage 1a: Concept Art Generation ===== -->
-  {#if generationStore.stage === 'idle' || generationStore.stage === 'concept_art'}
     <section class="stage-section">
-      <h2><Wand2 size={20} /> Step 1a: コンセプトアート生成</h2>
+      <div class="stage-header">
+        <h2><Wand2 size={20} /> Step 1a: コンセプトアート生成</h2>
+        {#if generationStore.hasConceptArtImages}
+          <button class="btn-reset" onclick={handleResetToIdle} disabled={generationStore.loading}>
+            <RotateCcw size={16} />
+            コンセプトアートをやり直す
+          </button>
+        {/if}
+      </div>
       <p class="stage-description">
         テキストからコンセプトアート（手描き風）を生成します．
         候補から1枚を選択し，次のステップでピクセルアートに変換します．
@@ -633,10 +810,13 @@
           <h3>コンセプトアート候補（クリックで選択）</h3>
           <div class="image-grid">
             {#each generationStore.conceptArtImages as imgPath}
-              <button
+              <div
                 class="image-card"
                 class:selected={generationStore.selectedConceptArtPath === imgPath}
+                role="button"
+                tabindex="0"
                 onclick={() => generationStore.selectConceptArt(imgPath)}
+                onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') generationStore.selectConceptArt(imgPath); }}
               >
                 <img src={convertFileSrc(imgPath)} alt="コンセプトアート候補" />
                 {#if generationStore.selectedConceptArtPath === imgPath}
@@ -644,18 +824,33 @@
                     <Check size={24} />
                   </div>
                 {/if}
-              </button>
+                <button
+                  class="save-btn"
+                  class:saved={isSavedImage(imgPath, 'concept_art')}
+                  onclick={(e) => { e.stopPropagation(); handleSaveImage(imgPath, 'concept_art'); }}
+                  title={isSavedImage(imgPath, 'concept_art') ? '保存済み' : 'プロジェクトに保存'}
+                >
+                  <Heart size={16} fill={isSavedImage(imgPath, 'concept_art') ? 'currentColor' : 'none'} />
+                </button>
+              </div>
             {/each}
           </div>
         </div>
       {/if}
     </section>
-  {/if}
 
   <!-- ===== Stage 1b: Pixel Art Conversion ===== -->
-  {#if (generationStore.stage === 'concept_art' && generationStore.selectedConceptArtPath !== null) || generationStore.stage === 'concept'}
+  {#if generationStore.selectedConceptArtPath !== null || generationStore.conceptImages.length > 0}
     <section class="stage-section">
-      <h2><Palette size={20} /> Step 1b: ピクセルアート変換</h2>
+      <div class="stage-header">
+        <h2><Palette size={20} /> Step 1b: ピクセルアート変換</h2>
+        {#if generationStore.hasConceptImages}
+          <button class="btn-reset" onclick={handleResetToConceptArt} disabled={generationStore.loading}>
+            <RotateCcw size={16} />
+            ピクセルアート変換をやり直す
+          </button>
+        {/if}
+      </div>
       <p class="stage-description">
         選択したコンセプトアートを img2img でピクセルアートスタイルに変換します．
         デノイズ強度で変換の度合いを調整できます．
@@ -763,10 +958,13 @@
           <h3>ピクセルアート候補（クリックで選択）</h3>
           <div class="image-grid">
             {#each generationStore.conceptImages as imgPath}
-              <button
+              <div
                 class="image-card"
                 class:selected={generationStore.selectedConceptPath === imgPath}
+                role="button"
+                tabindex="0"
                 onclick={() => generationStore.selectConcept(imgPath)}
+                onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') generationStore.selectConcept(imgPath); }}
               >
                 <img src={convertFileSrc(imgPath)} alt="ピクセルアート候補" />
                 {#if generationStore.selectedConceptPath === imgPath}
@@ -774,7 +972,15 @@
                     <Check size={24} />
                   </div>
                 {/if}
-              </button>
+                <button
+                  class="save-btn"
+                  class:saved={isSavedImage(imgPath, 'pixel_art')}
+                  onclick={(e) => { e.stopPropagation(); handleSaveImage(imgPath, 'pixel_art'); }}
+                  title={isSavedImage(imgPath, 'pixel_art') ? '保存済み' : 'プロジェクトに保存'}
+                >
+                  <Heart size={16} fill={isSavedImage(imgPath, 'pixel_art') ? 'currentColor' : 'none'} />
+                </button>
+              </div>
             {/each}
           </div>
         </div>
@@ -783,19 +989,29 @@
   {/if}
 
   <!-- ===== Stage 2: Direction Expansion ===== -->
-  {#if generationStore.selectedConceptPath}
+  {#if generationStore.selectedConceptPath !== null || generationStore.directionImages.length > 0}
     <section class="stage-section">
-      <h2><Compass size={20} /> Step 2: 方向展開</h2>
+      <div class="stage-header">
+        <h2><Compass size={20} /> Step 2: 方向展開</h2>
+        {#if generationStore.hasDirectionImages}
+          <button class="btn-reset" onclick={handleResetToPixelArt} disabled={generationStore.loading}>
+            <RotateCcw size={16} />
+            方向展開をやり直す
+          </button>
+        {/if}
+      </div>
       <p class="stage-description">
         選択したコンセプトをIP-Adapterで各方向（{projectDirections.join('，')}）に展開します．
       </p>
 
-      <div class="selected-concept-preview">
-        <span class="preview-label">選択中のコンセプト:</span>
-        <div class="thumbnail checkerboard-bg">
-          <img src={convertFileSrc(generationStore.selectedConceptPath)} alt="選択コンセプト" />
+      {#if generationStore.selectedConceptPath}
+        <div class="selected-concept-preview">
+          <span class="preview-label">選択中のコンセプト:</span>
+          <div class="thumbnail checkerboard-bg">
+            <img src={convertFileSrc(generationStore.selectedConceptPath)} alt="選択コンセプト" />
+          </div>
         </div>
-      </div>
+      {/if}
 
       <div class="params-grid">
         <div class="param-item">
@@ -850,6 +1066,39 @@
         </div>
       </div>
 
+      <!-- ControlNet Depth -->
+      <div class="controlnet-section">
+        <label class="checkbox-label">
+          <input
+            type="checkbox"
+            bind:checked={useControlnet}
+            disabled={generationStore.loading}
+          />
+          <span>ControlNet Depth を使用</span>
+        </label>
+
+        {#if useControlnet}
+          <div class="params-grid" style="margin-top: var(--space-3);">
+            <div class="param-item">
+              <label class="label" for="controlnet-strength">
+                ControlNet 強度
+                <span class="param-value">{controlnetStrength.toFixed(2)}</span>
+              </label>
+              <input
+                id="controlnet-strength"
+                type="range"
+                class="slider"
+                min="0"
+                max="1"
+                step="0.05"
+                bind:value={controlnetStrength}
+                disabled={!comfyuiStore.isConnected || generationStore.loading}
+              />
+            </div>
+          </div>
+        {/if}
+      </div>
+
       <button
         class="btn btn-primary"
         onclick={handleGenerateDirections}
@@ -873,6 +1122,14 @@
               <div class="image-card direction-card">
                 <img src={convertFileSrc(imgPath)} alt={projectDirections[i] ?? `方向${i}`} />
                 <span class="direction-label">{projectDirections[i] ?? `方向${i}`}</span>
+                <button
+                  class="save-btn"
+                  class:saved={isSavedImage(imgPath, 'direction')}
+                  onclick={(e) => { e.stopPropagation(); handleSaveImage(imgPath, 'direction'); }}
+                  title={isSavedImage(imgPath, 'direction') ? '保存済み' : 'プロジェクトに保存'}
+                >
+                  <Heart size={16} fill={isSavedImage(imgPath, 'direction') ? 'currentColor' : 'none'} />
+                </button>
               </div>
             {/each}
           </div>
@@ -882,9 +1139,17 @@
   {/if}
 
   <!-- ===== Stage 3: Animation Frames ===== -->
-  {#if generationStore.hasDirectionImages}
+  {#if generationStore.directionImages.length > 0 || generationStore.animationFrames.length > 0}
     <section class="stage-section">
-      <h2><Film size={20} /> Step 3: アニメーション生成</h2>
+      <div class="stage-header">
+        <h2><Film size={20} /> Step 3: アニメーション生成</h2>
+        {#if generationStore.hasAnimationFrames}
+          <button class="btn-reset" onclick={handleResetToDirection} disabled={generationStore.loading}>
+            <RotateCcw size={16} />
+            アニメーションをやり直す
+          </button>
+        {/if}
+      </div>
       <p class="stage-description">
         各方向のポーズ画像からアニメーションフレームを生成します．
         方向とアニメーションを選択して実行してください．
@@ -975,6 +1240,51 @@
         </div>
       </div>
 
+      <!-- Keyframe Interpolation -->
+      <div class="controlnet-section">
+        <label class="checkbox-label">
+          <input
+            type="checkbox"
+            bind:checked={useKeyframeInterpolation}
+            disabled={generationStore.loading}
+          />
+          <span>キーフレーム補間を使用</span>
+        </label>
+
+        {#if useKeyframeInterpolation && selectedAnimDef}
+          <div class="keyframe-options" style="margin-top: var(--space-3);">
+            <div class="form-group">
+              <label class="label">キーフレーム選択</label>
+              <div class="keyframe-checkboxes">
+                {#each Array(selectedAnimDef.frame_count) as _, i}
+                  <label class="keyframe-checkbox-label">
+                    <input
+                      type="checkbox"
+                      bind:checked={keyframeIndices[i]}
+                      disabled={generationStore.loading}
+                    />
+                    <span>F{i}</span>
+                  </label>
+                {/each}
+              </div>
+            </div>
+
+            <div class="form-group">
+              <label class="label" for="interpolation-method">補間方式</label>
+              <select
+                id="interpolation-method"
+                class="select"
+                bind:value={interpolationMethod}
+                disabled={generationStore.loading}
+              >
+                <option value="crossfade">crossfade</option>
+                <option value="nearest">nearest</option>
+              </select>
+            </div>
+          </div>
+        {/if}
+      </div>
+
       <button
         class="btn btn-primary"
         onclick={handleGenerateAnimation}
@@ -1003,6 +1313,14 @@
               <div class="image-card frame-card">
                 <img src={convertFileSrc(framePath)} alt={`フレーム ${i}`} />
                 <span class="frame-label">F{i}</span>
+                <button
+                  class="save-btn"
+                  class:saved={isSavedImage(framePath, 'animation')}
+                  onclick={(e) => { e.stopPropagation(); handleSaveImage(framePath, 'animation'); }}
+                  title={isSavedImage(framePath, 'animation') ? '保存済み' : 'プロジェクトに保存'}
+                >
+                  <Heart size={16} fill={isSavedImage(framePath, 'animation') ? 'currentColor' : 'none'} />
+                </button>
               </div>
             {/each}
           </div>
@@ -1012,7 +1330,7 @@
   {/if}
 
   <!-- ===== Promote / Finalize ===== -->
-  {#if generationStore.hasAnimationFrames || generationStore.hasDirectionImages}
+  {#if generationStore.animationFrames.length > 0}
     <section class="stage-section promote-section">
       <h2><ArrowUpToLine size={20} /> スプライトとして取り込み</h2>
       <p class="stage-description">
@@ -1049,6 +1367,96 @@
         <div class="completion-banner">
           <Check size={16} />
           <span>スプライトの取り込みが完了しました．AI処理タブで次のステップに進めます．</span>
+        </div>
+      {/if}
+    </section>
+  {/if}
+
+  <!-- ===== Saved Images ===== -->
+  {#if generationStore.hasSavedImages}
+    <section class="stage-section saved-section">
+      <h2><Heart size={20} /> 保存済み画像</h2>
+      <p class="stage-description">
+        やり直しても保持される保存済み画像です．不要な画像は削除できます．
+      </p>
+
+      {#if generationStore.savedImages.concept_art.length > 0}
+        <div class="saved-stage">
+          <h3>コンセプトアート</h3>
+          <div class="image-grid">
+            {#each generationStore.savedImages.concept_art as img}
+              <div class="image-card">
+                <img src={convertFileSrc(img)} alt="保存済みコンセプトアート" />
+                <button
+                  class="delete-saved-btn"
+                  onclick={() => handleDeleteSaved(img)}
+                  title="保存済み画像を削除"
+                >
+                  <X size={14} />
+                </button>
+              </div>
+            {/each}
+          </div>
+        </div>
+      {/if}
+
+      {#if generationStore.savedImages.pixel_art.length > 0}
+        <div class="saved-stage">
+          <h3>ピクセルアート</h3>
+          <div class="image-grid">
+            {#each generationStore.savedImages.pixel_art as img}
+              <div class="image-card">
+                <img src={convertFileSrc(img)} alt="保存済みピクセルアート" />
+                <button
+                  class="delete-saved-btn"
+                  onclick={() => handleDeleteSaved(img)}
+                  title="保存済み画像を削除"
+                >
+                  <X size={14} />
+                </button>
+              </div>
+            {/each}
+          </div>
+        </div>
+      {/if}
+
+      {#if generationStore.savedImages.direction.length > 0}
+        <div class="saved-stage">
+          <h3>方向別画像</h3>
+          <div class="image-grid direction-grid">
+            {#each generationStore.savedImages.direction as img}
+              <div class="image-card">
+                <img src={convertFileSrc(img)} alt="保存済み方向画像" />
+                <button
+                  class="delete-saved-btn"
+                  onclick={() => handleDeleteSaved(img)}
+                  title="保存済み画像を削除"
+                >
+                  <X size={14} />
+                </button>
+              </div>
+            {/each}
+          </div>
+        </div>
+      {/if}
+
+      {#if generationStore.savedImages.animation.length > 0}
+        <div class="saved-stage">
+          <h3>アニメーションフレーム</h3>
+          <div class="image-grid frame-grid">
+            {#each generationStore.savedImages.animation as img}
+              <div class="image-card">
+                <img src={convertFileSrc(img)} alt="保存済みアニメーション" />
+                <button
+                  class="delete-saved-btn"
+                  onclick={() => handleDeleteSaved(img)}
+                  title="保存済み画像を削除"
+                >
+                  <X size={14} />
+                </button>
+              </div>
+            {/each}
+          </div>
         </div>
       {/if}
     </section>
@@ -1244,11 +1652,48 @@
     border-radius: 8px;
   }
 
+  .stage-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: var(--space-2);
+  }
+
   .stage-section h2 {
     display: flex;
     align-items: center;
     gap: var(--space-2);
     margin-bottom: var(--space-2);
+  }
+
+  .stage-header h2 {
+    margin-bottom: 0;
+  }
+
+  .btn-reset {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.375rem;
+    padding: 0.375rem 0.75rem;
+    font-size: 0.8125rem;
+    color: var(--text-secondary, #6b7280);
+    background: transparent;
+    border: 1px solid var(--border-default, #d1d5db);
+    border-radius: 0.375rem;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    white-space: nowrap;
+  }
+
+  .btn-reset:hover:not(:disabled) {
+    color: var(--accent-warning, #d97706);
+    border-color: var(--accent-warning, #d97706);
+    background: rgba(217, 119, 6, 0.05);
+  }
+
+  .btn-reset:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
   }
 
   .stage-description {
@@ -1612,5 +2057,153 @@
     border-left: 3px solid var(--accent-primary);
     line-height: 1.6;
     word-break: break-word;
+  }
+
+  /* Save / Bookmark Button */
+  .save-btn {
+    position: absolute;
+    top: 0.375rem;
+    right: 0.375rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.75rem;
+    height: 1.75rem;
+    padding: 0;
+    background: rgba(0, 0, 0, 0.5);
+    border: none;
+    border-radius: 50%;
+    color: white;
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity 0.15s ease, color 0.15s ease;
+    z-index: 2;
+  }
+
+  .image-card:hover .save-btn,
+  .save-btn.saved {
+    opacity: 1;
+  }
+
+  .save-btn.saved {
+    color: #ef4444;
+    background: rgba(0, 0, 0, 0.6);
+  }
+
+  .save-btn:hover:not(.saved) {
+    color: #ef4444;
+  }
+
+  /* Delete Saved Button */
+  .delete-saved-btn {
+    position: absolute;
+    top: 0.25rem;
+    right: 0.25rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.5rem;
+    height: 1.5rem;
+    padding: 0;
+    background: rgba(0, 0, 0, 0.6);
+    border: none;
+    border-radius: 50%;
+    color: white;
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity 0.15s ease;
+    z-index: 2;
+  }
+
+  .image-card:hover .delete-saved-btn {
+    opacity: 1;
+  }
+
+  .delete-saved-btn:hover {
+    background: rgba(239, 68, 68, 0.8);
+  }
+
+  /* Saved Images Section */
+  .saved-section {
+    margin-top: 2rem;
+    padding-top: 1.5rem;
+    border-top: 1px solid var(--border-default, #e5e7eb);
+  }
+
+  .saved-stage {
+    margin-bottom: 1.5rem;
+  }
+
+  .saved-stage h3 {
+    font-size: 0.9375rem;
+    font-weight: 600;
+    margin-bottom: 0.75rem;
+    color: var(--text-secondary, #6b7280);
+  }
+
+  /* Model Selection Section */
+  .model-selection-section {
+    border-color: var(--border-default);
+  }
+
+  /* ControlNet / Checkbox Sections */
+  .controlnet-section {
+    padding: var(--space-3) var(--space-4);
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-default);
+    border-radius: 8px;
+    margin-top: var(--space-3);
+  }
+
+  .checkbox-label {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    font-size: var(--text-sm);
+    color: var(--text-primary);
+    cursor: pointer;
+  }
+
+  .checkbox-label input[type="checkbox"] {
+    width: 16px;
+    height: 16px;
+    cursor: pointer;
+  }
+
+  /* Keyframe Options */
+  .keyframe-options {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+  }
+
+  .keyframe-checkboxes {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+    padding: var(--space-2);
+  }
+
+  .keyframe-checkbox-label {
+    display: flex;
+    align-items: center;
+    gap: var(--space-1);
+    font-size: var(--text-sm);
+    color: var(--text-secondary);
+    cursor: pointer;
+    padding: var(--space-1) var(--space-2);
+    background: var(--bg-tertiary);
+    border-radius: 4px;
+    transition: background 150ms ease;
+  }
+
+  .keyframe-checkbox-label:hover {
+    background: var(--bg-primary);
+  }
+
+  .keyframe-checkbox-label input[type="checkbox"] {
+    width: 14px;
+    height: 14px;
+    cursor: pointer;
   }
 </style>

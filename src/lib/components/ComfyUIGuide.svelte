@@ -1,7 +1,7 @@
 <script lang="ts">
-  import { Check, X, Loader2, Terminal, Download, Wifi } from 'lucide-svelte';
+  import { Check, X, Loader2, Terminal, Download, Wifi, Puzzle, Copy } from 'lucide-svelte';
 
-  type GuideTab = 'install' | 'launch' | 'test';
+  type GuideTab = 'install' | 'custom-nodes' | 'launch' | 'test';
 
   let {
     endpoint,
@@ -19,67 +19,87 @@
   let testing = $state(false);
   let testResult = $state<boolean | null>(null);
 
-  // OS detection via navigator
-  const currentOS = $derived(
-    (() => {
-      if (typeof navigator === 'undefined') return 'linux';
-      const ua = navigator.userAgent.toLowerCase();
-      if (ua.includes('mac') || ua.includes('darwin')) return 'macos';
-      if (ua.includes('win')) return 'windows';
-      return 'linux';
-    })(),
-  );
+  // OS detection via navigator, used as default for dropdown
+  const detectedOS = (() => {
+    if (typeof navigator === 'undefined') return 'linux';
+    const ua = navigator.userAgent.toLowerCase();
+    if (ua.includes('mac') || ua.includes('darwin')) return 'macos';
+    if (ua.includes('win')) return 'windows';
+    return 'linux';
+  })();
+
+  let selectedOS = $state(detectedOS);
 
   // OS-specific install commands
   const installCommands: Record<string, string> = {
-    macos: `# Homebrew経由でPythonをインストール
-brew install python@3.11
+    macos: `# uvをインストール
+curl -LsSf https://astral.sh/uv/install.sh | sh
 
 # ComfyUIをクローン
 git clone https://github.com/comfyanonymous/ComfyUI.git
 cd ComfyUI
 
-# 仮想環境を作成して有効化
-python3 -m venv venv
-source venv/bin/activate
+# uvで仮想環境を作成して依存関係をインストール
+uv venv
+source .venv/bin/activate
+uv pip install -r requirements.txt`,
+    windows: `# uvをインストール (PowerShell)
+powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
 
-# 依存関係をインストール
-pip install -r requirements.txt`,
-    windows: `# ComfyUIをクローン
+# ComfyUIをクローン
 git clone https://github.com/comfyanonymous/ComfyUI.git
 cd ComfyUI
 
-# 仮想環境を作成して有効化
-python -m venv venv
-venv\\Scripts\\activate
-
-# 依存関係をインストール
-pip install -r requirements.txt
+# uvで仮想環境を作成して依存関係をインストール
+uv venv
+.venv\\Scripts\\activate
+uv pip install -r requirements.txt
 
 # またはComfyUI Desktop版をダウンロード
 # https://github.com/comfyanonymous/ComfyUI/releases`,
-    linux: `# ComfyUIをクローン
+    linux: `# システムパッケージをインストール (Ubuntu/Debian)
+sudo apt update
+sudo apt install -y python3 git
+
+# NVIDIA GPUドライバとCUDAをインストール (推奨)
+# https://developer.nvidia.com/cuda-downloads からOS/バージョンを選択
+# 例: Ubuntu 22.04/24.04
+sudo apt install -y nvidia-driver-550
+sudo apt install -y nvidia-cuda-toolkit
+
+# uvをインストール
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# ComfyUIをクローン
 git clone https://github.com/comfyanonymous/ComfyUI.git
 cd ComfyUI
 
-# 仮想環境を作成して有効化
-python3 -m venv venv
-source venv/bin/activate
+# uvで仮想環境を作成
+uv venv
+source .venv/bin/activate
+
+# PyTorch (CUDA版) をインストール
+uv pip install torch torchvision torchaudio \\
+  --extra-index-url https://download.pytorch.org/whl/cu121
 
 # 依存関係をインストール
-pip install -r requirements.txt`,
+uv pip install -r requirements.txt
+
+# AMD GPU (ROCm) の場合は以下を代わりに使用:
+# uv pip install torch torchvision torchaudio \\
+#   --extra-index-url https://download.pytorch.org/whl/rocm6.0`,
   };
 
   // OS-specific launch commands
   const launchCommands: Record<string, string> = {
     macos: `cd ComfyUI
-source venv/bin/activate
+source .venv/bin/activate
 python main.py --listen 127.0.0.1 --port 8188`,
     windows: `cd ComfyUI
-venv\\Scripts\\activate
+.venv\\Scripts\\activate
 python main.py --listen 127.0.0.1 --port 8188`,
     linux: `cd ComfyUI
-source venv/bin/activate
+source .venv/bin/activate
 python3 main.py --listen 127.0.0.1 --port 8188`,
   };
 
@@ -88,6 +108,97 @@ python3 main.py --listen 127.0.0.1 --port 8188`,
     windows: 'Windows',
     linux: 'Linux',
   };
+
+  // All-in-one install script
+  const allInOneScript = `#!/bin/bash
+set -e
+
+# ComfyUI のルートディレクトリで実行してください
+# 例: cd ~/ComfyUI
+
+COMFYUI_DIR="\${1:-.}"
+cd "$COMFYUI_DIR"
+
+echo "=== カスタムノードをインストール ==="
+
+cd custom_nodes
+
+# ComfyUI Manager
+if [ ! -d "ComfyUI-Manager" ]; then
+  echo "[1/3] ComfyUI Manager をインストール中..."
+  git clone https://github.com/ltdrdata/ComfyUI-Manager.git
+else
+  echo "[1/3] ComfyUI Manager: 既にインストール済み"
+fi
+
+# ComfyUI_IPAdapter_plus
+if [ ! -d "ComfyUI_IPAdapter_plus" ]; then
+  echo "[2/3] ComfyUI_IPAdapter_plus をインストール中..."
+  git clone https://github.com/cubiq/ComfyUI_IPAdapter_plus.git
+else
+  echo "[2/3] ComfyUI_IPAdapter_plus: 既にインストール済み"
+fi
+
+# comfyui_controlnet_aux
+if [ ! -d "comfyui_controlnet_aux" ]; then
+  echo "[3/3] comfyui_controlnet_aux をインストール中..."
+  git clone https://github.com/Fannovel16/comfyui_controlnet_aux.git
+  cd comfyui_controlnet_aux
+  uv pip install -r requirements.txt
+  cd ..
+else
+  echo "[3/3] comfyui_controlnet_aux: 既にインストール済み"
+fi
+
+cd "$COMFYUI_DIR"
+
+echo ""
+echo "=== モデルファイルをダウンロード ==="
+
+mkdir -p models/ipadapter models/clip_vision models/checkpoints
+
+# IP-Adapter Plus (SDXL)
+if [ ! -f "models/ipadapter/ip-adapter-plus_sdxl_vit-h.safetensors" ]; then
+  echo "IP-Adapter Plus モデルをダウンロード中..."
+  curl -L -o models/ipadapter/ip-adapter-plus_sdxl_vit-h.safetensors \\
+    https://huggingface.co/h94/IP-Adapter/resolve/main/sdxl_models/ip-adapter-plus_sdxl_vit-h.safetensors
+else
+  echo "IP-Adapter Plus モデル: 既にダウンロード済み"
+fi
+
+# CLIP Vision
+if [ ! -f "models/clip_vision/CLIP-ViT-H-14-laion2B-s32B-b79K.safetensors" ]; then
+  echo "CLIP Vision モデルをダウンロード中..."
+  curl -L -o models/clip_vision/CLIP-ViT-H-14-laion2B-s32B-b79K.safetensors \\
+    https://huggingface.co/h94/IP-Adapter/resolve/main/models/image_encoder/model.safetensors
+else
+  echo "CLIP Vision モデル: 既にダウンロード済み"
+fi
+
+# SDXL Base checkpoint
+if [ ! -f "models/checkpoints/sd_xl_base_1.0.safetensors" ]; then
+  echo "SDXL Base モデルをダウンロード中 (約6.5GB)..."
+  curl -L -o models/checkpoints/sd_xl_base_1.0.safetensors \\
+    https://huggingface.co/stabilityai/stable-diffusion-xl-base-1.0/resolve/main/sd_xl_base_1.0.safetensors
+else
+  echo "SDXL Base モデル: 既にダウンロード済み"
+fi
+
+echo ""
+echo "=== セットアップ完了 ==="
+echo "ComfyUI を再起動してください．"`;
+
+  let copied = $state(false);
+
+  async function copyScript() {
+    try {
+      await navigator.clipboard.writeText(allInOneScript);
+      copied = true;
+      setTimeout(() => { copied = false; }, 2000);
+    } catch {
+      // fallback
+    }
+  }
 
   // Connection test handler
   async function runConnectionTest() {
@@ -119,6 +230,16 @@ python3 main.py --listen 127.0.0.1 --port 8188`,
     <button
       class="tab-button"
       role="tab"
+      aria-selected={activeTab === 'custom-nodes'}
+      class:active={activeTab === 'custom-nodes'}
+      onclick={() => (activeTab = 'custom-nodes')}
+    >
+      <Puzzle size={16} />
+      カスタムノード
+    </button>
+    <button
+      class="tab-button"
+      role="tab"
       aria-selected={activeTab === 'launch'}
       class:active={activeTab === 'launch'}
       onclick={() => (activeTab = 'launch')}
@@ -146,34 +267,140 @@ python3 main.py --listen 127.0.0.1 --port 8188`,
     {#if activeTab === 'install'}
       <div class="tab-panel">
         <h4>ComfyUI インストール手順</h4>
-        <p class="os-info">
-          お使いのOS: <strong>{osLabel[currentOS]}</strong>
-        </p>
+        <div class="os-selector">
+          <label class="label" for="os-select">OS を選択:</label>
+          <select
+            id="os-select"
+            class="input os-select"
+            bind:value={selectedOS}
+          >
+            {#each Object.entries(osLabel) as [key, label]}
+              <option value={key}>{label}</option>
+            {/each}
+          </select>
+        </div>
 
         <div class="code-block">
-          <pre><code>{installCommands[currentOS]}</code></pre>
+          <pre><code>{installCommands[selectedOS]}</code></pre>
         </div>
 
         <div class="note">
           <p>
-            ControlNet と IP-Adapter のカスタムノードもインストールが必要です．
-            ComfyUI Manager の利用を推奨します．
+            AI キャラクター生成機能を使用するには，追加のカスタムノードが必要です．
+            「カスタムノード」タブを参照してください．
           </p>
-          <ol class="install-steps">
-            <li>ComfyUI Manager をインストール:
-              <code>cd custom_nodes && git clone https://github.com/ltdrdata/ComfyUI-Manager.git</code>
-            </li>
-            <li>ComfyUI を再起動し，Manager から ControlNet ノードを検索してインストール</li>
-            <li>必要なモデル（ControlNet，チェックポイント）を <code>models/</code> に配置</li>
-          </ol>
+        </div>
+      </div>
+    {:else if activeTab === 'custom-nodes'}
+      <div class="tab-panel">
+        <h4>カスタムノードのインストール</h4>
+
+        <div class="note">
+          <p>
+            AI キャラクター生成（方向展開・アニメーション展開）には以下のカスタムノードが必要です．
+            ComfyUI の仮想環境を有効化した状態で実行してください．
+          </p>
+        </div>
+
+        <!-- All-in-one script -->
+        <div class="all-in-one">
+          <div class="all-in-one-header">
+            <h5 class="section-title">一括インストールスクリプト</h5>
+            <button class="btn btn-ghost btn-sm copy-btn" onclick={copyScript}>
+              {#if copied}
+                <Check size={14} />
+                コピー済み
+              {:else}
+                <Copy size={14} />
+                コピー
+              {/if}
+            </button>
+          </div>
+          <p class="section-desc">
+            以下のスクリプトでカスタムノードとモデルを一括インストールできます．
+            ComfyUI のルートディレクトリで実行してください．
+          </p>
+          <div class="code-block code-block-scroll">
+            <pre><code>{allInOneScript}</code></pre>
+          </div>
+          <div class="usage-hint">
+            <code>bash setup_figurine_studio.sh /path/to/ComfyUI</code>
+          </div>
+        </div>
+
+        <hr class="divider" />
+
+        <h5 class="section-title">個別インストール手順</h5>
+
+        <h5 class="section-title">1. ComfyUI Manager（推奨）</h5>
+        <p class="section-desc">カスタムノードの管理を簡単にするツールです．</p>
+        <div class="code-block">
+          <pre><code>cd ComfyUI/custom_nodes
+git clone https://github.com/ltdrdata/ComfyUI-Manager.git</code></pre>
+        </div>
+
+        <h5 class="section-title">2. ComfyUI_IPAdapter_plus（必須）</h5>
+        <p class="section-desc">IP-Adapter によるキャラクターの一貫性維持に使用します．</p>
+        <div class="code-block">
+          <pre><code>cd ComfyUI/custom_nodes
+git clone https://github.com/cubiq/ComfyUI_IPAdapter_plus.git
+
+# IP-Adapter モデルをダウンロード
+cd ComfyUI/models
+mkdir -p ipadapter clip_vision
+
+# IP-Adapter Plus モデル (SDXL用)
+curl -L -o ipadapter/ip-adapter-plus_sdxl_vit-h.safetensors \
+  https://huggingface.co/h94/IP-Adapter/resolve/main/sdxl_models/ip-adapter-plus_sdxl_vit-h.safetensors
+
+# CLIP Vision モデル
+curl -L -o clip_vision/CLIP-ViT-H-14-laion2B-s32B-b79K.safetensors \
+  https://huggingface.co/h94/IP-Adapter/resolve/main/models/image_encoder/model.safetensors</code></pre>
+        </div>
+
+        <h5 class="section-title">3. comfyui_controlnet_aux（推奨）</h5>
+        <p class="section-desc">ControlNet の前処理ノード（OpenPose / DWPose）を提供します．</p>
+        <div class="code-block">
+          <pre><code>cd ComfyUI/custom_nodes
+git clone https://github.com/Fannovel16/comfyui_controlnet_aux.git
+cd comfyui_controlnet_aux
+uv pip install -r requirements.txt</code></pre>
+        </div>
+
+        <h5 class="section-title">4. ベースモデル</h5>
+        <p class="section-desc">チェックポイントモデルを配置します．</p>
+        <div class="code-block">
+          <pre><code># SDXL Base モデルを models/checkpoints/ に配置
+# https://huggingface.co/stabilityai/stable-diffusion-xl-base-1.0
+curl -L -o ComfyUI/models/checkpoints/sd_xl_base_1.0.safetensors \
+  https://huggingface.co/stabilityai/stable-diffusion-xl-base-1.0/resolve/main/sd_xl_base_1.0.safetensors</code></pre>
+        </div>
+
+        <div class="note">
+          <p>
+            インストール後，ComfyUI を再起動してください．
+            ComfyUI Manager を使用すると，Web UI 上から不足ノードの検索・インストールも可能です．
+          </p>
         </div>
       </div>
     {:else if activeTab === 'launch'}
       <div class="tab-panel">
         <h4>ComfyUI 起動コマンド</h4>
+        <div class="os-selector">
+          <label class="label" for="os-select-launch">OS を選択:</label>
+          <select
+            id="os-select-launch"
+            class="input os-select"
+            bind:value={selectedOS}
+          >
+            {#each Object.entries(osLabel) as [key, label]}
+              <option value={key}>{label}</option>
+            {/each}
+          </select>
+        </div>
 
         <div class="code-block">
-          <pre><code>{launchCommands[currentOS]}</code></pre>
+          <pre><code>{launchCommands[selectedOS]}</code></pre>
         </div>
 
         <div class="note">
@@ -335,10 +562,22 @@ python3 main.py --listen 127.0.0.1 --port 8188`,
     margin-bottom: var(--space-3);
   }
 
-  .os-info {
-    font-size: var(--text-sm);
-    color: var(--text-secondary);
+  .os-selector {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
     margin-bottom: var(--space-4);
+  }
+
+  .os-selector .label {
+    margin-bottom: 0;
+    white-space: nowrap;
+    font-size: var(--text-sm);
+  }
+
+  .os-select {
+    width: auto;
+    min-width: 140px;
   }
 
   /* Code Block */
@@ -386,16 +625,70 @@ python3 main.py --listen 127.0.0.1 --port 8188`,
     border-radius: 3px;
   }
 
-  .install-steps {
-    margin-top: var(--space-2);
-    padding-left: var(--space-5);
+  .section-title {
     font-size: var(--text-sm);
-    color: var(--text-secondary);
-    line-height: var(--leading-relaxed);
+    font-weight: var(--font-weight-semibold);
+    margin-bottom: var(--space-1);
+    margin-top: var(--space-4);
   }
 
-  .install-steps li {
+  .section-title:first-of-type {
+    margin-top: 0;
+  }
+
+  .section-desc {
+    font-size: var(--text-sm);
+    color: var(--text-secondary);
+    margin-bottom: var(--space-2);
+  }
+
+  .all-in-one {
+    margin-bottom: var(--space-4);
+  }
+
+  .all-in-one-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
     margin-bottom: var(--space-1);
+  }
+
+  .all-in-one-header .section-title {
+    margin: 0;
+  }
+
+  .copy-btn {
+    display: flex;
+    align-items: center;
+    gap: var(--space-1);
+    font-size: var(--text-xs);
+    min-width: 90px;
+    justify-content: center;
+  }
+
+  .code-block-scroll {
+    max-height: 320px;
+    overflow-y: auto;
+  }
+
+  .usage-hint {
+    margin-top: var(--space-2);
+    font-size: var(--text-sm);
+    color: var(--text-secondary);
+  }
+
+  .usage-hint code {
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);
+    background: var(--bg-primary);
+    padding: 2px 6px;
+    border-radius: 3px;
+  }
+
+  .divider {
+    border: none;
+    border-top: 1px solid var(--border-default);
+    margin: var(--space-6) 0;
   }
 
   /* Tips */

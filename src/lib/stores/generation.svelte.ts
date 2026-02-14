@@ -11,8 +11,9 @@ import type {
   PixelArtConversionParams,
   DirectionParams,
   AnimationParams,
+  SavedImages,
 } from '$lib/types';
-import { generationApi, onGenerationProgress } from '$lib/api/tauri';
+import { generationApi, comfyuiModelApi, onGenerationProgress } from '$lib/api/tauri';
 import { toastStore } from './toast.svelte';
 
 // --- State ---
@@ -23,9 +24,12 @@ let conceptImages = $state<string[]>([]);
 let selectedConceptPath = $state<string | null>(null);
 let directionImages = $state<string[]>([]);
 let animationFrames = $state<string[]>([]);
+let savedImages = $state<SavedImages>({ concept_art: [], pixel_art: [], direction: [], animation: [] });
 let progress = $state<GenerationProgress | null>(null);
 let loading = $state(false);
 let error = $state<string | null>(null);
+let availableCheckpoints = $state<string[]>([]);
+let availableLoras = $state<string[]>([]);
 
 // --- Derived ---
 const hasConceptArtImages = $derived(conceptArtImages.length > 0);
@@ -55,8 +59,8 @@ async function generateConceptArt(
     });
 
     const images = await generationApi.generateConceptArt(characterId, params);
-    conceptArtImages = images;
-    toastStore.addToast('success', `コンセプトアート画像を${images.length}枚生成しました`);
+    conceptArtImages = [...conceptArtImages, ...images];
+    toastStore.addToast('success', `コンセプトアート画像を${images.length}枚生成しました（合計${conceptArtImages.length}枚）`);
     return images;
   } catch (e) {
     error = String(e);
@@ -98,8 +102,8 @@ async function convertToPixelArt(
       selectedConceptArtPath,
       params,
     );
-    conceptImages = images;
-    toastStore.addToast('success', `ピクセルアート画像を${images.length}枚生成しました`);
+    conceptImages = [...conceptImages, ...images];
+    toastStore.addToast('success', `ピクセルアート画像を${images.length}枚生成しました（合計${conceptImages.length}枚）`);
     return images;
   } catch (e) {
     error = String(e);
@@ -254,10 +258,137 @@ async function loadState(characterId: string): Promise<void> {
     progress = null;
     loading = false;
     error = null;
+    // Load saved images
+    await loadSavedImages(characterId);
   } catch (e) {
     // State recovery failure is not critical - just start fresh
     console.warn('Failed to load generation state:', e);
     reset();
+  }
+}
+
+async function resetToIdle(characterId: string): Promise<void> {
+  loading = true;
+  error = null;
+  try {
+    await generationApi.clearGenerationStage(characterId, 'concept_art');
+    await generationApi.clearGenerationStage(characterId, 'concept');
+    conceptArtImages = [];
+    selectedConceptArtPath = null;
+    conceptImages = [];
+    selectedConceptPath = null;
+    stage = 'idle';
+    toastStore.addToast('success', 'コンセプトアートをクリアしました');
+  } catch (e) {
+    error = String(e);
+    toastStore.addToast('error', `クリアに失敗しました: ${e}`);
+  } finally {
+    loading = false;
+  }
+}
+
+async function resetToConceptArt(characterId: string): Promise<void> {
+  loading = true;
+  error = null;
+  try {
+    await generationApi.clearGenerationStage(characterId, 'concept');
+    conceptImages = [];
+    selectedConceptPath = null;
+    stage = 'concept_art';
+    toastStore.addToast('success', 'ピクセルアート変換をクリアしました');
+  } catch (e) {
+    error = String(e);
+    toastStore.addToast('error', `クリアに失敗しました: ${e}`);
+  } finally {
+    loading = false;
+  }
+}
+
+async function resetToPixelArt(characterId: string): Promise<void> {
+  loading = true;
+  error = null;
+  try {
+    await generationApi.clearGenerationStage(characterId, 'direction');
+    await generationApi.clearGenerationStage(characterId, 'animation');
+    directionImages = [];
+    animationFrames = [];
+    stage = 'concept';
+    toastStore.addToast('success', '方向展開をクリアしました');
+  } catch (e) {
+    error = String(e);
+    toastStore.addToast('error', `クリアに失敗しました: ${e}`);
+  } finally {
+    loading = false;
+  }
+}
+
+async function resetToDirection(characterId: string): Promise<void> {
+  loading = true;
+  error = null;
+  try {
+    await generationApi.clearGenerationStage(characterId, 'animation');
+    animationFrames = [];
+    stage = 'direction';
+    toastStore.addToast('success', 'アニメーションをクリアしました');
+  } catch (e) {
+    error = String(e);
+    toastStore.addToast('error', `クリアに失敗しました: ${e}`);
+  } finally {
+    loading = false;
+  }
+}
+
+async function loadSavedImages(characterId: string): Promise<void> {
+  try {
+    savedImages = await generationApi.getSavedImages(characterId);
+  } catch (e) {
+    console.warn('Failed to load saved images:', e);
+  }
+}
+
+async function saveImage(characterId: string, imagePath: string, stage: string): Promise<void> {
+  try {
+    await generationApi.saveGenerationImage(characterId, imagePath, stage);
+    await loadSavedImages(characterId);
+    toastStore.addToast('success', '画像を保存しました');
+  } catch (e) {
+    toastStore.addToast('error', `画像の保存に失敗しました: ${e}`);
+  }
+}
+
+async function deleteSavedImage(characterId: string, imagePath: string): Promise<void> {
+  try {
+    await generationApi.deleteSavedImage(imagePath);
+    await loadSavedImages(characterId);
+    toastStore.addToast('success', '保存済み画像を削除しました');
+  } catch (e) {
+    toastStore.addToast('error', `画像の削除に失敗しました: ${e}`);
+  }
+}
+
+function isSaved(imagePath: string, stage: string): boolean {
+  const filename = imagePath.split('/').pop() || '';
+  const list =
+    stage === 'concept_art' ? savedImages.concept_art
+    : stage === 'pixel_art' ? savedImages.pixel_art
+    : stage === 'direction' ? savedImages.direction
+    : savedImages.animation;
+  return list.some((p) => p.endsWith(filename));
+}
+
+async function fetchCheckpoints(): Promise<void> {
+  try {
+    availableCheckpoints = await comfyuiModelApi.listCheckpoints();
+  } catch (e) {
+    console.warn('Failed to fetch checkpoints:', e);
+  }
+}
+
+async function fetchLoras(): Promise<void> {
+  try {
+    availableLoras = await comfyuiModelApi.listLoras();
+  } catch (e) {
+    console.warn('Failed to fetch loras:', e);
   }
 }
 
@@ -269,6 +400,7 @@ function reset(): void {
   selectedConceptPath = null;
   directionImages = [];
   animationFrames = [];
+  savedImages = { concept_art: [], pixel_art: [], direction: [], animation: [] };
   progress = null;
   loading = false;
   error = null;
@@ -321,6 +453,23 @@ export const generationStore = {
   get progressPercentage() {
     return progressPercentage;
   },
+  get savedImages() {
+    return savedImages;
+  },
+  get availableCheckpoints() {
+    return availableCheckpoints;
+  },
+  get availableLoras() {
+    return availableLoras;
+  },
+  get hasSavedImages() {
+    return (
+      savedImages.concept_art.length > 0 ||
+      savedImages.pixel_art.length > 0 ||
+      savedImages.direction.length > 0 ||
+      savedImages.animation.length > 0
+    );
+  },
   loadState,
   generateConceptArt,
   selectConceptArt,
@@ -330,5 +479,15 @@ export const generationStore = {
   generateDirections,
   generateAnimationFrames,
   promoteToRaw,
+  resetToIdle,
+  resetToConceptArt,
+  resetToPixelArt,
+  resetToDirection,
   reset,
+  loadSavedImages,
+  saveImage,
+  deleteSavedImage,
+  isSaved,
+  fetchCheckpoints,
+  fetchLoras,
 };

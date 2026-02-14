@@ -11,8 +11,8 @@ export interface Project {
   base_path: string;
   tile_width: number;
   tile_height: number;
-  directions: string;
-  animations: string;
+  directions: string[] | string;
+  animations: AnimationDef[] | string;
   style_prompt: string;
   negative_prompt: string;
   controlnet_weight: number;
@@ -276,6 +276,10 @@ export interface ConceptParams {
   steps?: number;
   cfg_scale?: number;
   num_candidates: number;
+  checkpoint_name?: string;
+  lora_name?: string;
+  lora_strength_model?: number;
+  lora_strength_clip?: number;
 }
 
 export interface PixelArtConversionParams {
@@ -286,6 +290,12 @@ export interface PixelArtConversionParams {
   steps?: number;
   cfg_scale?: number;
   num_candidates: number;
+  pixel_grid_width?: number;
+  pixel_grid_height?: number;
+  checkpoint_name?: string;
+  lora_name?: string;
+  lora_strength_model?: number;
+  lora_strength_clip?: number;
 }
 
 export interface DirectionParams {
@@ -296,6 +306,10 @@ export interface DirectionParams {
   seed?: number;
   steps?: number;
   cfg_scale?: number;
+  checkpoint_name?: string;
+  use_controlnet?: boolean;
+  controlnet_strength?: number;
+  depth_map_path?: string;
 }
 
 export interface AnimationParams {
@@ -307,6 +321,9 @@ export interface AnimationParams {
   seed?: number;
   steps?: number;
   cfg_scale?: number;
+  checkpoint_name?: string;
+  keyframes?: number[];
+  interpolation?: string;
 }
 
 export interface GenerationProgress {
@@ -325,6 +342,13 @@ export interface GenerationState {
   direction_images: string[];
   animation_frames: string[];
   stage: GenerationStage;
+}
+
+export interface SavedImages {
+  concept_art: string[];
+  pixel_art: string[];
+  direction: string[];
+  animation: string[];
 }
 
 // --- Cloud API ---
@@ -358,6 +382,21 @@ export interface PaletteParams {
   dithering: DitheringMethod;
   preserve_alpha: boolean;
 }
+
+// --- Directions ---
+
+export const ALL_DIRECTIONS = [
+  { id: 'down', label: '下' },
+  { id: 'up', label: '上' },
+  { id: 'left', label: '左' },
+  { id: 'right', label: '右' },
+  { id: 'down_left', label: '左下' },
+  { id: 'down_right', label: '右下' },
+  { id: 'up_left', label: '左上' },
+  { id: 'up_right', label: '右上' },
+] as const;
+
+export const DIRECTION_SORT_ORDER = ALL_DIRECTIONS.map(d => d.id);
 
 // --- Breadcrumb ---
 

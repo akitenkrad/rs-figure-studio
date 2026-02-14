@@ -20,6 +20,14 @@ pub struct ConceptParams {
     pub seed: Option<i64>,
     pub steps: Option<u32>,
     pub cfg_scale: Option<f64>,
+    /// チェックポイントモデル名（デフォルト: "sd_xl_base_1.0.safetensors"）
+    pub checkpoint_name: Option<String>,
+    /// LoRA モデル名（デフォルト: "pixel-art-xl.safetensors"）
+    pub lora_name: Option<String>,
+    /// LoRA モデル強度（デフォルト: 1.2）
+    pub lora_strength_model: Option<f64>,
+    /// LoRA CLIP 強度（デフォルト: 1.0）
+    pub lora_strength_clip: Option<f64>,
     /// 生成候補数（デフォルト: 3）
     pub num_candidates: u32,
 }
@@ -36,6 +44,14 @@ pub struct DirectionParams {
     pub seed: Option<i64>,
     pub steps: Option<u32>,
     pub cfg_scale: Option<f64>,
+    /// チェックポイントモデル名
+    pub checkpoint_name: Option<String>,
+    /// ControlNet Depth を使用するか（デフォルト: false）
+    pub use_controlnet: Option<bool>,
+    /// ControlNet 強度（0.0-1.0，デフォルト: 0.5）
+    pub controlnet_strength: Option<f64>,
+    /// カスタム深度マップパス（省略時はデフォルト使用）
+    pub depth_map_path: Option<String>,
 }
 
 /// アニメーション展開パラメータ
@@ -52,6 +68,12 @@ pub struct AnimationParams {
     pub seed: Option<i64>,
     pub steps: Option<u32>,
     pub cfg_scale: Option<f64>,
+    /// チェックポイントモデル名
+    pub checkpoint_name: Option<String>,
+    /// キーフレームインデックス（省略時=全フレーム AI 生成）
+    pub keyframes: Option<Vec<u32>>,
+    /// 補間方式（"crossfade" | "nearest"，デフォルト: "crossfade"）
+    pub interpolation: Option<String>,
 }
 
 /// ピクセルアート変換パラメータ（コンセプトアート → ピクセルアート img2img）
@@ -66,6 +88,18 @@ pub struct PixelArtConversionParams {
     pub cfg_scale: Option<f64>,
     /// 生成候補数（デフォルト: 3）
     pub num_candidates: u32,
+    /// ピクセルグリッド幅（後処理用，省略時はスキップ）
+    pub pixel_grid_width: Option<u32>,
+    /// ピクセルグリッド高さ
+    pub pixel_grid_height: Option<u32>,
+    /// チェックポイントモデル名
+    pub checkpoint_name: Option<String>,
+    /// LoRA モデル名
+    pub lora_name: Option<String>,
+    /// LoRA モデル強度
+    pub lora_strength_model: Option<f64>,
+    /// LoRA CLIP 強度
+    pub lora_strength_clip: Option<f64>,
 }
 
 /// 生成進捗イベント
@@ -328,11 +362,28 @@ impl GenerationBackend for ComfyUIBackend {
                 "cfg_scale".into(),
                 params.cfg_scale.unwrap_or(7.0).to_string(),
             );
+            replacements.insert(
+                "checkpoint_name".into(),
+                params.checkpoint_name.clone().unwrap_or_else(|| "sd_xl_base_1.0.safetensors".into()),
+            );
+            replacements.insert(
+                "lora_name".into(),
+                params.lora_name.clone().unwrap_or_else(|| "pixel-art-xl.safetensors".into()),
+            );
+            replacements.insert(
+                "lora_strength_model".into(),
+                params.lora_strength_model.unwrap_or(1.2).to_string(),
+            );
+            replacements.insert(
+                "lora_strength_clip".into(),
+                params.lora_strength_clip.unwrap_or(1.0).to_string(),
+            );
 
             let resolved =
                 Self::replace_placeholders(&self.workflow_templates.concept, &replacements);
 
-            let output_path = output_dir.join(format!("concept_{:03}.png", i + 1));
+            let ts = chrono::Utc::now().format("%Y%m%d%H%M%S");
+            let output_path = output_dir.join(format!("concept_{}_{:03}.png", ts, i + 1));
 
             match self
                 .execute_workflow_and_save(&resolved, &output_path)
@@ -410,11 +461,16 @@ impl GenerationBackend for ComfyUIBackend {
                 "cfg_scale".into(),
                 params.cfg_scale.unwrap_or(7.0).to_string(),
             );
+            replacements.insert(
+                "checkpoint_name".into(),
+                params.checkpoint_name.clone().unwrap_or_else(|| "sd_xl_base_1.0.safetensors".into()),
+            );
 
             let resolved =
                 Self::replace_placeholders(&self.workflow_templates.concept_art, &replacements);
 
-            let output_path = output_dir.join(format!("concept_art_{:03}.png", i + 1));
+            let ts = chrono::Utc::now().format("%Y%m%d%H%M%S");
+            let output_path = output_dir.join(format!("concept_art_{}_{:03}.png", ts, i + 1));
 
             match self
                 .execute_workflow_and_save(&resolved, &output_path)
@@ -471,7 +527,7 @@ impl GenerationBackend for ComfyUIBackend {
         // コンセプトアート画像をアップロード
         let upload = self
             .client
-            .upload_image(concept_art_path, "input")
+            .upload_image(concept_art_path, "")
             .await
             .map_err(|e| AppError::ComfyUI(format!("画像アップロードに失敗: {}", e)))?;
 
@@ -505,19 +561,47 @@ impl GenerationBackend for ComfyUIBackend {
                 "cfg_scale".into(),
                 params.cfg_scale.unwrap_or(7.0).to_string(),
             );
+            replacements.insert(
+                "checkpoint_name".into(),
+                params.checkpoint_name.clone().unwrap_or_else(|| "sd_xl_base_1.0.safetensors".into()),
+            );
+            replacements.insert(
+                "lora_name".into(),
+                params.lora_name.clone().unwrap_or_else(|| "pixel-art-xl.safetensors".into()),
+            );
+            replacements.insert(
+                "lora_strength_model".into(),
+                params.lora_strength_model.unwrap_or(1.2).to_string(),
+            );
+            replacements.insert(
+                "lora_strength_clip".into(),
+                params.lora_strength_clip.unwrap_or(1.0).to_string(),
+            );
 
             let resolved = Self::replace_placeholders(
                 &self.workflow_templates.pixel_art_conversion,
                 &replacements,
             );
 
-            let output_path = output_dir.join(format!("concept_{:03}.png", i + 1));
+            let ts = chrono::Utc::now().format("%Y%m%d%H%M%S");
+            let output_path = output_dir.join(format!("concept_{}_{:03}.png", ts, i + 1));
 
             match self
                 .execute_workflow_and_save(&resolved, &output_path)
                 .await
             {
                 Ok(()) => {
+                    // ピクセルグリッド整合化（後処理）
+                    if let (Some(grid_w), Some(grid_h)) = (params.pixel_grid_width, params.pixel_grid_height) {
+                        if grid_w > 0 && grid_h > 0 {
+                            if let Ok(img) = image::open(&output_path) {
+                                let rgba = img.to_rgba8();
+                                let pixelated = crate::commands::image_processing::pixelate_image(&rgba, grid_w, grid_h);
+                                let _ = pixelated.save(&output_path);
+                                log::info!("ピクセルグリッド整合化を適用: {}x{}", grid_w, grid_h);
+                            }
+                        }
+                    }
                     log::info!("ピクセルアート変換画像を保存: {:?}", output_path);
                     results.push(GeneratedImage {
                         path: output_path,
@@ -560,7 +644,7 @@ impl GenerationBackend for ComfyUIBackend {
         // コンセプト画像をアップロード
         let upload = self
             .client
-            .upload_image(concept_image, "input")
+            .upload_image(concept_image, "")
             .await
             .map_err(|e| AppError::ComfyUI(format!("画像アップロードに失敗: {}", e)))?;
 
@@ -594,6 +678,10 @@ impl GenerationBackend for ComfyUIBackend {
             replacements.insert(
                 "cfg_scale".into(),
                 params.cfg_scale.unwrap_or(7.0).to_string(),
+            );
+            replacements.insert(
+                "checkpoint_name".into(),
+                params.checkpoint_name.clone().unwrap_or_else(|| "sd_xl_base_1.0.safetensors".into()),
             );
             if let Some(ref lora) = params.lora_name {
                 replacements.insert("lora_name".into(), lora.clone());
@@ -652,7 +740,7 @@ impl GenerationBackend for ComfyUIBackend {
         // ベースポーズ画像をアップロード
         let upload = self
             .client
-            .upload_image(base_pose_image, "input")
+            .upload_image(base_pose_image, "")
             .await
             .map_err(|e| AppError::ComfyUI(format!("画像アップロードに失敗: {}", e)))?;
 
@@ -660,7 +748,15 @@ impl GenerationBackend for ComfyUIBackend {
         let base_seed = Self::resolve_seed(params.seed);
         let mut results = Vec::new();
 
-        for frame_idx in 0..total {
+        // キーフレーム補間: keyframes 指定時はキーフレームのみ AI 生成
+        let frames_to_generate: Vec<u32> = if let Some(ref kf) = params.keyframes {
+            kf.iter().filter(|&&f| f < total).copied().collect()
+        } else {
+            (0..total).collect()
+        };
+
+        for frame_idx in &frames_to_generate {
+            let frame_idx = *frame_idx;
             progress_callback(GenerationProgress {
                 stage: "animation".into(),
                 current: frame_idx + 1,
@@ -701,6 +797,10 @@ impl GenerationBackend for ComfyUIBackend {
             replacements.insert(
                 "cfg_scale".into(),
                 params.cfg_scale.unwrap_or(7.0).to_string(),
+            );
+            replacements.insert(
+                "checkpoint_name".into(),
+                params.checkpoint_name.clone().unwrap_or_else(|| "sd_xl_base_1.0.safetensors".into()),
             );
             if let Some(ref lora) = params.lora_name {
                 replacements.insert("lora_name".into(), lora.clone());
@@ -743,6 +843,55 @@ impl GenerationBackend for ComfyUIBackend {
             }
         }
 
+        // キーフレーム補間が有効な場合，中割りフレームを生成
+        if params.keyframes.is_some() && results.len() < total as usize {
+            let method_str = params.interpolation.as_deref().unwrap_or("crossfade");
+            let method = crate::services::frame_interpolation::InterpolationMethod::from_str(method_str);
+
+            // キーフレーム画像を読み込み
+            let mut keyframe_data: Vec<(u32, image::RgbaImage)> = Vec::new();
+            for img in &results {
+                if let Some(idx) = img.frame_index {
+                    if let Ok(loaded) = image::open(&img.path) {
+                        keyframe_data.push((idx, loaded.to_rgba8()));
+                    }
+                }
+            }
+            keyframe_data.sort_by_key(|(idx, _)| *idx);
+
+            // 補間実行
+            match crate::services::frame_interpolation::interpolate_frames(&keyframe_data, total, &method) {
+                Ok(interpolated) => {
+                    for (frame_idx, frame_img) in interpolated.iter().enumerate() {
+                        let fidx = frame_idx as u32;
+                        // キーフレームはスキップ（既に生成済み）
+                        if results.iter().any(|r| r.frame_index == Some(fidx)) {
+                            continue;
+                        }
+                        let interp_path = output_dir.join(format!(
+                            "{}_{}_{}_{:02}.png",
+                            direction, params.animation_name, "frame", fidx
+                        ));
+                        if let Err(e) = frame_img.save(&interp_path) {
+                            log::warn!("補間フレーム {} の保存に失敗: {}", fidx, e);
+                            continue;
+                        }
+                        results.push(GeneratedImage {
+                            path: interp_path,
+                            direction: Some(direction.to_string()),
+                            animation: Some(params.animation_name.clone()),
+                            frame_index: Some(fidx),
+                        });
+                    }
+                    // Sort by frame index
+                    results.sort_by_key(|r| r.frame_index.unwrap_or(0));
+                }
+                Err(e) => {
+                    log::warn!("キーフレーム補間に失敗: {}", e);
+                }
+            }
+        }
+
         progress_callback(GenerationProgress {
             stage: "animation".into(),
             current: total,
@@ -756,5 +905,38 @@ impl GenerationBackend for ComfyUIBackend {
         });
 
         Ok(results)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_replace_string_placeholder() {
+        let template = r#"{"text": "{{positive_prompt}}, pixel art"}"#;
+        let mut replacements = HashMap::new();
+        replacements.insert("positive_prompt".into(), "a cute cat".into());
+        let result = ComfyUIBackend::replace_placeholders(template, &replacements);
+        assert_eq!(result, r#"{"text": "a cute cat, pixel art"}"#);
+    }
+
+    #[test]
+    fn test_replace_numeric_placeholder() {
+        let template = r#"{"steps": "{{steps}}", "cfg": "{{cfg_scale}}"}"#;
+        let mut replacements = HashMap::new();
+        replacements.insert("steps".into(), "30".into());
+        replacements.insert("cfg_scale".into(), "7.5".into());
+        let result = ComfyUIBackend::replace_placeholders(template, &replacements);
+        // Numeric values should have quotes removed
+        assert_eq!(result, r#"{"steps": 30, "cfg": 7.5}"#);
+    }
+
+    #[test]
+    fn test_unknown_placeholder_preserved() {
+        let template = r#"{"value": "{{unknown_key}}"}"#;
+        let replacements = HashMap::new();
+        let result = ComfyUIBackend::replace_placeholders(template, &replacements);
+        assert_eq!(result, r#"{"value": "{{unknown_key}}"}"#);
     }
 }

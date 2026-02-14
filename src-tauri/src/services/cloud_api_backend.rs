@@ -148,25 +148,160 @@ impl GenerationBackend for CloudApiBackend {
 
     async fn generate_concept_art(
         &self,
-        _params: &ConceptParams,
-        _output_dir: &Path,
-        _progress_callback: Box<dyn Fn(GenerationProgress) + Send + Sync>,
+        params: &ConceptParams,
+        output_dir: &Path,
+        progress_callback: Box<dyn Fn(GenerationProgress) + Send + Sync>,
     ) -> Result<Vec<GeneratedImage>, AppError> {
-        Err(AppError::CloudApi(
-            "コンセプトアート生成はクラウド API バックエンドではまだサポートされていません".into(),
-        ))
+        progress_callback(GenerationProgress {
+            stage: "concept_art".into(),
+            current: 0,
+            total: params.num_candidates,
+            status: "processing".into(),
+            message: "クラウドAPIでコンセプトアートを生成中...".into(),
+        });
+
+        // Modify prompt for concept art style
+        let concept_prompt = format!(
+            "{}, concept art, detailed illustration, high quality, character design",
+            params.positive_prompt
+        );
+        let concept_negative = format!(
+            "{}, pixel art, pixelated, low resolution",
+            params.negative_prompt
+        );
+
+        let request = CloudGenerateRequest {
+            prompt: concept_prompt,
+            negative_prompt: concept_negative,
+            reference_image_base64: None,
+            direction: None,
+            animation_name: None,
+            frame_index: None,
+            ipadapter_weight: None,
+            lora_name: None,
+            lora_weight: None,
+            seed: params.seed,
+            steps: params.steps,
+            cfg_scale: params.cfg_scale,
+            num_images: params.num_candidates,
+        };
+
+        let results = self.generate(&request).await?;
+
+        let mut images = Vec::new();
+        for result in &results {
+            let filename = format!("concept_art_{}.png", result.index);
+            let path =
+                CloudApiClient::save_image(&result.image_bytes, output_dir, &filename)?;
+
+            images.push(GeneratedImage {
+                path,
+                direction: None,
+                animation: None,
+                frame_index: None,
+            });
+
+            progress_callback(GenerationProgress {
+                stage: "concept_art".into(),
+                current: result.index + 1,
+                total: params.num_candidates,
+                status: "processing".into(),
+                message: format!(
+                    "コンセプトアート {}/{} 完了",
+                    result.index + 1,
+                    params.num_candidates
+                ),
+            });
+        }
+
+        progress_callback(GenerationProgress {
+            stage: "concept_art".into(),
+            current: params.num_candidates,
+            total: params.num_candidates,
+            status: "completed".into(),
+            message: "コンセプトアート生成完了".into(),
+        });
+
+        Ok(images)
     }
 
     async fn convert_to_pixel_art(
         &self,
-        _concept_art_path: &Path,
-        _params: &PixelArtConversionParams,
-        _output_dir: &Path,
-        _progress_callback: Box<dyn Fn(GenerationProgress) + Send + Sync>,
+        concept_art_path: &Path,
+        params: &PixelArtConversionParams,
+        output_dir: &Path,
+        progress_callback: Box<dyn Fn(GenerationProgress) + Send + Sync>,
     ) -> Result<Vec<GeneratedImage>, AppError> {
-        Err(AppError::CloudApi(
-            "ピクセルアート変換はクラウド API バックエンドではまだサポートされていません".into(),
-        ))
+        progress_callback(GenerationProgress {
+            stage: "pixel_art_conversion".into(),
+            current: 0,
+            total: params.num_candidates,
+            status: "processing".into(),
+            message: "クラウドAPIでピクセルアート変換中...".into(),
+        });
+
+        // Encode concept art as base64 reference
+        let ref_base64 = Self::encode_image(concept_art_path)?;
+
+        // Modify prompt for pixel art conversion
+        let pixel_prompt = format!(
+            "{}, pixel art style, game character sprite, clean pixels, retro game",
+            params.positive_prompt
+        );
+
+        let request = CloudGenerateRequest {
+            prompt: pixel_prompt,
+            negative_prompt: params.negative_prompt.clone(),
+            reference_image_base64: Some(ref_base64),
+            direction: None,
+            animation_name: None,
+            frame_index: None,
+            ipadapter_weight: None,
+            lora_name: None,
+            lora_weight: None,
+            seed: params.seed,
+            steps: params.steps,
+            cfg_scale: params.cfg_scale,
+            num_images: params.num_candidates,
+        };
+
+        let results = self.generate(&request).await?;
+
+        let mut images = Vec::new();
+        for result in &results {
+            let filename = format!("pixel_art_{}.png", result.index);
+            let path =
+                CloudApiClient::save_image(&result.image_bytes, output_dir, &filename)?;
+
+            images.push(GeneratedImage {
+                path,
+                direction: None,
+                animation: None,
+                frame_index: None,
+            });
+
+            progress_callback(GenerationProgress {
+                stage: "pixel_art_conversion".into(),
+                current: result.index + 1,
+                total: params.num_candidates,
+                status: "processing".into(),
+                message: format!(
+                    "ピクセルアート変換 {}/{} 完了",
+                    result.index + 1,
+                    params.num_candidates
+                ),
+            });
+        }
+
+        progress_callback(GenerationProgress {
+            stage: "pixel_art_conversion".into(),
+            current: params.num_candidates,
+            total: params.num_candidates,
+            status: "completed".into(),
+            message: "ピクセルアート変換完了".into(),
+        });
+
+        Ok(images)
     }
 
     async fn generate_directions(
