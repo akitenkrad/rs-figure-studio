@@ -1,6 +1,6 @@
 <script lang="ts">
   import { goto } from '$app/navigation';
-  import { Settings, Cpu, Download, Sun, Moon, FolderOpen, Package } from 'lucide-svelte';
+  import { Settings, Cpu, Download, Sun, Moon, FolderOpen, Package, Cloud, Layers } from 'lucide-svelte';
   import { open } from '@tauri-apps/plugin-dialog';
   import Breadcrumb from '$lib/components/Breadcrumb.svelte';
   import { settingsStore } from '$lib/stores/settings.svelte';
@@ -45,6 +45,18 @@
       description: 'ONNXモデル（U2-Net）のダウンロードと初期化',
       href: '/settings/models',
       icon: Download,
+    },
+    {
+      title: 'クラウドAPI',
+      description: 'PixelLab / fal.ai / Replicate の API キー設定',
+      href: '/settings/cloud-api',
+      icon: Cloud,
+    },
+    {
+      title: 'LoRA管理',
+      description: 'LoRA モデルのインポートとキャラクター割り当て',
+      href: '/settings/lora',
+      icon: Layers,
     },
   ];
 </script>

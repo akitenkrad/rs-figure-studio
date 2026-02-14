@@ -4,7 +4,7 @@
   import { characterStore } from '$lib/stores/character.svelte';
   import { projectStore } from '$lib/stores/project.svelte';
   import { spriteStore } from '$lib/stores/sprite.svelte';
-  import { FileText, ImageDown, Cpu, Eye } from 'lucide-svelte';
+  import { FileText, ImageDown, Sparkles, Cpu, Eye } from 'lucide-svelte';
 
   let { children } = $props();
 
@@ -42,11 +42,13 @@
     // Add sub-page label to breadcrumb if on a sub-page
     ...(currentPath.endsWith('/import')
       ? [{ label: 'インポート' }]
-      : currentPath.endsWith('/process')
-        ? [{ label: 'AI処理' }]
-        : currentPath.endsWith('/preview')
-          ? [{ label: 'プレビュー' }]
-          : []),
+      : currentPath.endsWith('/generate')
+        ? [{ label: '生成' }]
+        : currentPath.endsWith('/process')
+          ? [{ label: 'AI処理' }]
+          : currentPath.endsWith('/preview')
+            ? [{ label: 'プレビュー' }]
+            : []),
   ]);
 
   const statusLabel = $derived(
@@ -78,6 +80,12 @@
       href: `/character/${characterId}/import`,
       icon: ImageDown,
       active: currentPath === `/character/${characterId}/import`,
+    },
+    {
+      label: '生成',
+      href: `/character/${characterId}/generate`,
+      icon: Sparkles,
+      active: currentPath === `/character/${characterId}/generate`,
     },
     {
       label: 'AI処理',

@@ -57,6 +57,10 @@
     if (tileWidth < 8 || tileWidth > 512) newErrors.tileWidth = 'タイルサイズは8~512pxの範囲で指定してください';
     if (tileHeight < 8 || tileHeight > 512) newErrors.tileHeight = 'タイルサイズは8~512pxの範囲で指定してください';
     if (animations.some(a => !a.name.trim())) newErrors.animations = 'アニメーション名を入力してください';
+    if (animations.some(a => a.frame_count < 1 || a.frame_count > 32))
+      newErrors.animations = 'フレーム数は1〜32の範囲で指定してください';
+    if (animations.some(a => a.frame_duration_ms < 16 || a.frame_duration_ms > 2000))
+      newErrors.animations = 'フレーム時間は16〜2000msの範囲で指定してください';
     errors = newErrors;
     return Object.keys(newErrors).length === 0;
   }
@@ -171,6 +175,12 @@
     <div class="form-group">
       <!-- svelte-ignore a11y_label_has_associated_control -->
       <label class="label">アニメーション定義</label>
+      <div class="animation-header">
+        <span class="header-name">アニメーション名</span>
+        <span class="header-number">フレーム数</span>
+        <span class="header-number">時間(ms) <span class="header-range">16〜2000</span></span>
+        <span class="header-action"></span>
+      </div>
       <div class="animation-list">
         {#each animations as anim, i}
           <div class="animation-row">
@@ -186,6 +196,7 @@
               bind:value={anim.frame_count}
               min="1"
               max="32"
+              placeholder="1〜32"
               title="フレーム数"
             />
             <input
@@ -194,7 +205,8 @@
               bind:value={anim.frame_duration_ms}
               min="16"
               max="2000"
-              step="10"
+              step="1"
+              placeholder="16〜2000"
               title="フレーム時間 (ms)"
             />
             <button type="button" class="btn btn-ghost" onclick={() => removeAnimation(i)} aria-label="削除">
@@ -318,8 +330,35 @@
   }
 
   .input-small {
-    width: 80px;
+    width: 100px;
     flex-shrink: 0;
+  }
+
+  .animation-header {
+    display: flex;
+    gap: var(--space-2);
+    align-items: center;
+    margin-bottom: var(--space-1);
+    font-size: var(--text-xs);
+    color: var(--text-muted);
+  }
+
+  .header-name {
+    flex: 1;
+  }
+
+  .header-number {
+    width: 100px;
+    flex-shrink: 0;
+  }
+
+  .header-action {
+    width: 32px;
+    flex-shrink: 0;
+  }
+
+  .header-range {
+    opacity: 0.7;
   }
 
   .range-input {

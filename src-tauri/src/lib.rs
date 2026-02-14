@@ -45,6 +45,7 @@ pub fn run() {
             // Image Processing
             commands::image_processing::normalize_sprite,
             commands::image_processing::normalize_batch,
+            commands::image_processing::normalize_palette,
             // Model Download
             commands::model_download::check_onnx_model,
             commands::model_download::download_onnx_model,
@@ -65,12 +66,32 @@ pub fn run() {
             commands::comfyui::delete_workflow,
             commands::comfyui::set_default_workflow,
             commands::comfyui::process_batch_comfyui,
+            // ComfyUI Model
+            commands::comfyui_model::check_comfyui_model,
+            commands::comfyui_model::download_comfyui_model,
+            commands::comfyui_model::get_comfyui_checkpoints_path,
             // Settings
             commands::settings_commands::get_settings,
             commands::settings_commands::update_setting,
             // Sprite
             commands::sprite_commands::list_sprites,
             commands::sprite_commands::update_sprite_assignment,
+            // Generation (AI character generation)
+            commands::generation::generate_concept,
+            commands::generation::generate_concept_art,
+            commands::generation::convert_to_pixel_art,
+            commands::generation::generate_directions,
+            commands::generation::generate_animation_frames,
+            commands::generation::promote_generated_to_raw,
+            commands::generation::test_cloud_api_connection,
+            commands::generation::get_generation_state,
+            // LoRA
+            commands::lora::import_lora,
+            commands::lora::list_loras,
+            commands::lora::delete_lora,
+            commands::lora::assign_lora,
+            commands::lora::unassign_lora,
+            commands::lora::list_character_loras,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

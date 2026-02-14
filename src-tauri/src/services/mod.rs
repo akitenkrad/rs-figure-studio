@@ -1,5 +1,8 @@
 // Services module
+pub mod cloud_api_backend;
+pub mod cloud_api_client;
 pub mod comfyui_client;
 pub mod filename_parser;
+pub mod generation_backend;
 pub mod onnx_service;
 pub mod path_utils;

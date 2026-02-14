@@ -33,6 +33,10 @@ pub enum AppError {
     #[error("ComfyUIエラー: {0}")]
     ComfyUI(String),
 
+    /// クラウドAPI連携のエラー
+    #[error("クラウドAPIエラー: {0}")]
+    CloudApi(String),
+
     /// 画像処理のエラー
     #[error("画像処理エラー: {0}")]
     ImageProcessing(String),
@@ -58,6 +62,7 @@ impl AppError {
             AppError::Io(_) => "IO",
             AppError::Onnx(_) => "ONNX",
             AppError::ComfyUI(_) => "COMFYUI",
+            AppError::CloudApi(_) => "CLOUD_API",
             AppError::ImageProcessing(_) => "IMAGE_PROCESSING",
             AppError::Export(_) => "EXPORT",
             AppError::Internal(_) => "INTERNAL",

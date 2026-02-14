@@ -64,6 +64,7 @@ export interface Character {
   custom_prompt: string | null;
   status: CharacterStatus;
   spritesheet_path: string | null;
+  concept_image_path: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -100,7 +101,7 @@ export interface Sprite {
   created_at: string;
 }
 
-export type SpriteStatus = 'raw' | 'ai_processed' | 'bg_removed' | 'finalized';
+export type SpriteStatus = 'generated' | 'raw' | 'ai_processed' | 'bg_removed' | 'finalized';
 
 // --- Processing ---
 
@@ -212,6 +213,20 @@ export interface ComfyUIProgress {
   current_file: string;
 }
 
+// --- ComfyUI Model ---
+
+export interface ComfyuiModelStatus {
+  available: boolean;
+  available_models: string[];
+}
+
+export interface ComfyuiModelDownloadProgress {
+  downloaded_bytes: number;
+  total_bytes: number;
+  percentage: number;
+  model_name: string;
+}
+
 // --- Workflow ---
 
 export interface Workflow {
@@ -246,6 +261,103 @@ export interface ProcessingParams {
 // --- Connection Status ---
 
 export type ComfyUIConnectionStatus = 'disconnected' | 'connecting' | 'connected' | 'error';
+
+// --- AI Generation ---
+
+export type GenerationBackendType = 'comfyui' | 'cloud_api';
+
+export type GenerationStage = 'idle' | 'concept_art' | 'concept' | 'direction' | 'animation' | 'completed';
+
+export interface ConceptParams {
+  positive_prompt: string;
+  negative_prompt: string;
+  style_preset?: string;
+  seed?: number;
+  steps?: number;
+  cfg_scale?: number;
+  num_candidates: number;
+}
+
+export interface PixelArtConversionParams {
+  positive_prompt: string;
+  negative_prompt: string;
+  denoise_strength: number; // 0.3-0.8, default 0.55
+  seed?: number;
+  steps?: number;
+  cfg_scale?: number;
+  num_candidates: number;
+}
+
+export interface DirectionParams {
+  directions: string[];
+  ipadapter_weight: number;
+  lora_name?: string;
+  lora_weight?: number;
+  seed?: number;
+  steps?: number;
+  cfg_scale?: number;
+}
+
+export interface AnimationParams {
+  animation_name: string;
+  frame_count: number;
+  ipadapter_weight: number;
+  lora_name?: string;
+  lora_weight?: number;
+  seed?: number;
+  steps?: number;
+  cfg_scale?: number;
+}
+
+export interface GenerationProgress {
+  stage: string;
+  current: number;
+  total: number;
+  status: string;
+  message: string;
+}
+
+export interface GenerationState {
+  concept_art_images: string[];
+  selected_concept_art_path: string | null;
+  concept_images: string[];
+  selected_concept_path: string | null;
+  direction_images: string[];
+  animation_frames: string[];
+  stage: GenerationStage;
+}
+
+// --- Cloud API ---
+
+export type CloudApiProvider = 'pixellab' | 'fal_ai' | 'replicate';
+
+// --- LoRA ---
+
+export interface LoraModel {
+  id: string;
+  name: string;
+  file_path: string;
+  description: string;
+  created_at: string;
+}
+
+export interface CharacterLora {
+  character_id: string;
+  lora_id: string;
+  lora_name: string;
+  lora_file_path: string;
+  weight: number;
+}
+
+// --- Palette Normalization ---
+
+export type DitheringMethod = 'none' | 'floyd_steinberg' | 'ordered';
+
+export interface PaletteParams {
+  max_colors: number;
+  dithering: DitheringMethod;
+  preserve_alpha: boolean;
+}
 
 // --- Breadcrumb ---
 

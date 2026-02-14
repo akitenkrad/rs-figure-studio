@@ -18,10 +18,21 @@ import type {
   DownloadProgress,
   ProcessingProgress,
   ComfyUIProgress,
+  ComfyuiModelStatus,
+  ComfyuiModelDownloadProgress,
   BgRemovalProgress,
+  GenerationProgress,
+  GenerationState,
   Workflow,
   CreateWorkflow,
   ProcessingParams,
+  ConceptParams,
+  PixelArtConversionParams,
+  DirectionParams,
+  AnimationParams,
+  LoraModel,
+  CharacterLora,
+  PaletteParams,
 } from '$lib/types';
 
 // --- Project API ---
@@ -167,6 +178,137 @@ export const comfyuiApi = {
   },
 };
 
+// --- ComfyUI Model API ---
+
+export const comfyuiModelApi = {
+  async checkModel(modelName: string): Promise<ComfyuiModelStatus> {
+    return invoke<ComfyuiModelStatus>('check_comfyui_model', { modelName });
+  },
+
+  async downloadModel(
+    modelName: string,
+    downloadUrl: string,
+    checkpointsPath: string,
+  ): Promise<string> {
+    return invoke<string>('download_comfyui_model', {
+      modelName,
+      downloadUrl,
+      checkpointsPath,
+    });
+  },
+
+  async getCheckpointsPath(): Promise<string> {
+    return invoke<string>('get_comfyui_checkpoints_path');
+  },
+};
+
+// --- Generation API ---
+
+export const generationApi = {
+  async generateConcept(
+    characterId: string,
+    params: ConceptParams,
+  ): Promise<string[]> {
+    return invoke<string[]>('generate_concept', { characterId, params });
+  },
+
+  async generateConceptArt(
+    characterId: string,
+    params: ConceptParams,
+  ): Promise<string[]> {
+    return invoke<string[]>('generate_concept_art', {
+      characterId,
+      params,
+    });
+  },
+
+  async convertToPixelArt(
+    characterId: string,
+    conceptArtPath: string,
+    params: PixelArtConversionParams,
+  ): Promise<string[]> {
+    return invoke<string[]>('convert_to_pixel_art', {
+      characterId,
+      conceptArtPath,
+      params,
+    });
+  },
+
+  async generateDirections(
+    characterId: string,
+    conceptImagePath: string,
+    params: DirectionParams,
+  ): Promise<string[]> {
+    return invoke<string[]>('generate_directions', {
+      characterId,
+      conceptImagePath,
+      params,
+    });
+  },
+
+  async generateAnimationFrames(
+    characterId: string,
+    basePosePath: string,
+    direction: string,
+    params: AnimationParams,
+  ): Promise<string[]> {
+    return invoke<string[]>('generate_animation_frames', {
+      characterId,
+      basePosePath,
+      direction,
+      params,
+    });
+  },
+
+  async promoteGeneratedToRaw(spriteIds: string[]): Promise<string[]> {
+    return invoke<string[]>('promote_generated_to_raw', { spriteIds });
+  },
+
+  async testCloudApiConnection(provider: string, apiKey: string): Promise<boolean> {
+    return invoke<boolean>('test_cloud_api_connection', { provider, apiKey });
+  },
+
+  async getGenerationState(characterId: string): Promise<GenerationState> {
+    return invoke<GenerationState>('get_generation_state', { characterId });
+  },
+};
+
+// --- LoRA API ---
+
+export const loraApi = {
+  async import(name: string, filePath: string, description?: string): Promise<LoraModel> {
+    return invoke<LoraModel>('import_lora', { name, filePath, description });
+  },
+
+  async list(): Promise<LoraModel[]> {
+    return invoke<LoraModel[]>('list_loras');
+  },
+
+  async delete(id: string): Promise<void> {
+    return invoke('delete_lora', { id });
+  },
+
+  async assign(characterId: string, loraId: string, weight: number): Promise<void> {
+    return invoke('assign_lora', { characterId, loraId, weight });
+  },
+
+  async unassign(characterId: string, loraId: string): Promise<void> {
+    return invoke('unassign_lora', { characterId, loraId });
+  },
+
+  async listForCharacter(characterId: string): Promise<CharacterLora[]> {
+    return invoke<CharacterLora[]>('list_character_loras', { characterId });
+  },
+};
+
+// --- Palette API ---
+
+export const paletteApi = {
+  async normalizePalette(characterId: string, params: PaletteParams): Promise<string[]> {
+    return invoke<string[]>('normalize_palette', { characterId, params });
+  },
+};
+
 // --- Sprite API ---
 
 export const spriteApi = {
@@ -231,4 +373,23 @@ export function onBgRemovalProgress(
   return listen<BgRemovalProgress>('bg-removal-progress', (event) => {
     callback(event.payload);
   });
+}
+
+export function onGenerationProgress(
+  callback: (progress: GenerationProgress) => void,
+): Promise<UnlistenFn> {
+  return listen<GenerationProgress>('generation-progress', (event) => {
+    callback(event.payload);
+  });
+}
+
+export function onComfyuiModelDownloadProgress(
+  callback: (progress: ComfyuiModelDownloadProgress) => void,
+): Promise<UnlistenFn> {
+  return listen<ComfyuiModelDownloadProgress>(
+    'comfyui-model-download-progress',
+    (event) => {
+      callback(event.payload);
+    },
+  );
 }

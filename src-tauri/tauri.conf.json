@@ -20,16 +20,12 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; img-src 'self' asset: https://asset.localhost; connect-src 'self' http://127.0.0.1:8188 ws://127.0.0.1:8188; style-src 'self' 'unsafe-inline'"
+      "csp": "default-src 'self'; img-src 'self' asset: http://asset.localhost https://asset.localhost; connect-src 'self' http://127.0.0.1:8188 ws://127.0.0.1:8188 https://api.pixellab.ai https://fal.run https://api.replicate.com https://api.replicate.com/v1; style-src 'self' 'unsafe-inline'",
+      "assetProtocol": {
+        "enable": true,
+        "scope": ["**/*"]
+      }
     }
   },
-  "plugins": {
-    "dialog": {},
-    "fs": {
-      "scope": ["**"]
-    },
-    "shell": {
-      "open": true
-    }
-  }
+  "plugins": {}
 }

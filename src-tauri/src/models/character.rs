@@ -9,6 +9,7 @@ pub struct Character {
     pub custom_prompt: Option<String>,
     pub status: String,
     pub spritesheet_path: Option<String>,
+    pub concept_image_path: Option<String>,
     pub created_at: String,
     pub updated_at: String,
 }

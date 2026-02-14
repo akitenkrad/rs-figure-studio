@@ -2,6 +2,8 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum SpriteStatus {
+    #[serde(rename = "generated")]
+    Generated,
     #[serde(rename = "raw")]
     Raw,
     #[serde(rename = "ai_processed")]
@@ -15,6 +17,7 @@ pub enum SpriteStatus {
 impl SpriteStatus {
     pub fn as_str(&self) -> &str {
         match self {
+            Self::Generated => "generated",
             Self::Raw => "raw",
             Self::AiProcessed => "ai_processed",
             Self::BgRemoved => "bg_removed",
@@ -24,6 +27,7 @@ impl SpriteStatus {
 
     pub fn from_str(s: &str) -> anyhow::Result<Self> {
         match s {
+            "generated" => Ok(Self::Generated),
             "raw" => Ok(Self::Raw),
             "ai_processed" => Ok(Self::AiProcessed),
             "bg_removed" => Ok(Self::BgRemoved),

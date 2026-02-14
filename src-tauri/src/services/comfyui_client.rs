@@ -226,6 +226,30 @@ impl ComfyUIClient {
         .await
     }
 
+    /// ComfyUI のノード情報を取得
+    ///
+    /// GET /object_info/{node_name} でノードの入力パラメータ情報を取得する．
+    /// CheckpointLoaderSimple の場合，利用可能なチェックポイント一覧を返す．
+    pub async fn get_object_info(&self, node_name: &str) -> Result<serde_json::Value> {
+        let url = format!("{}/object_info/{}", self.endpoint, node_name);
+        let response = self
+            .client
+            .get(&url)
+            .timeout(std::time::Duration::from_secs(10))
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            return Err(anyhow::anyhow!(
+                "Failed to get object_info ({})",
+                response.status()
+            ));
+        }
+
+        let body: serde_json::Value = response.json().await?;
+        Ok(body)
+    }
+
     /// ポーリングで処理完了を待つ
     ///
     /// 1秒間隔で /history/{prompt_id} をポーリングし，

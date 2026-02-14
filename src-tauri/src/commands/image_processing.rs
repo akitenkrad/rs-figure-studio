@@ -289,3 +289,240 @@ pub async fn normalize_batch(
 
     Ok(results)
 }
+
+// ============================================================
+// パレット正規化
+// ============================================================
+
+/// ディザリング方式
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DitheringMethod {
+    None,
+    FloydSteinberg,
+    Ordered,
+}
+
+/// パレット正規化パラメータ
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct PaletteParams {
+    pub max_colors: u32,
+    pub dithering: DitheringMethod,
+    pub preserve_alpha: bool,
+}
+
+/// Floyd-Steinberg ディザリングによるパレット正規化
+///
+/// 指定色数に減色し，ディザリングで品質を維持する．
+/// ピクセルアートでは `Ordered` or `None` が一般的．
+#[tauri::command]
+pub async fn normalize_palette(
+    state: tauri::State<'_, AppState>,
+    character_id: String,
+    params: PaletteParams,
+    app: tauri::AppHandle,
+) -> Result<Vec<String>, AppError> {
+    let conn = state
+        .db
+        .lock()
+        .map_err(|e| AppError::Internal(e.to_string()))?;
+
+    let sprites = db::queries::sprite::get_sprites_by_character(&conn, &character_id)?;
+
+    let character = db::queries::character::get_character(&conn, &character_id)?
+        .ok_or_else(|| AppError::NotFound("キャラクターが見つかりません".into()))?;
+    let project = db::queries::project::get_project(&conn, &character.project_id)?
+        .ok_or_else(|| AppError::Internal("プロジェクトが見つかりません".into()))?;
+
+    let output_dir = std::path::Path::new(&project.base_path)
+        .join(&character.name)
+        .join("palette_normalized");
+    std::fs::create_dir_all(&output_dir)
+        .map_err(|e| AppError::Io(format!("ディレクトリ作成に失敗: {}", e)))?;
+
+    // 処理対象: final_path > processed_path > raw_path
+    let target_sprites: Vec<_> = sprites
+        .iter()
+        .filter(|s| s.final_path.is_some() || s.processed_path.is_some() || s.raw_path.is_some())
+        .collect();
+
+    let total = target_sprites.len() as u32;
+    let mut results = Vec::new();
+
+    for (i, sprite) in target_sprites.iter().enumerate() {
+        let input_path = sprite
+            .final_path
+            .as_ref()
+            .or(sprite.processed_path.as_ref())
+            .or(sprite.raw_path.as_ref())
+            .ok_or_else(|| AppError::Validation("画像パスがありません".into()))?;
+
+        let img = image::open(input_path)
+            .map_err(|e| AppError::ImageProcessing(format!("画像を開けません: {}", e)))?
+            .to_rgba8();
+
+        let reduced = reduce_palette(&img, params.max_colors, &params.dithering, params.preserve_alpha);
+
+        let src_path = std::path::Path::new(input_path);
+        let filename = src_path
+            .file_name()
+            .ok_or_else(|| AppError::Internal("無効なパス".into()))?;
+        let output_path = output_dir.join(filename);
+
+        reduced.save(&output_path).map_err(|e| {
+            AppError::ImageProcessing(format!("パレット正規化画像の保存に失敗: {}", e))
+        })?;
+
+        let output_str = output_path.to_string_lossy().to_string();
+        results.push(output_str);
+
+        let _ = app.emit(
+            "palette-progress",
+            serde_json::json!({
+                "current": i + 1,
+                "total": total,
+                "sprite_id": sprite.id,
+            }),
+        );
+    }
+
+    log::info!(
+        "パレット正規化完了: {} 枚 ({}色, character: {})",
+        results.len(),
+        params.max_colors,
+        character.name
+    );
+
+    Ok(results)
+}
+
+/// パレット減色処理
+///
+/// color_quant（NeuQuant）によるメディアンカットで減色し，
+/// ディザリングで品質を維持する．
+fn reduce_palette(
+    img: &image::RgbaImage,
+    max_colors: u32,
+    dithering: &DitheringMethod,
+    preserve_alpha: bool,
+) -> image::RgbaImage {
+    let (w, h) = img.dimensions();
+
+    // 不透明ピクセルのRGBデータを収集
+    let mut rgb_pixels: Vec<[u8; 3]> = Vec::new();
+    for pixel in img.pixels() {
+        if !preserve_alpha || pixel[3] > 0 {
+            rgb_pixels.push([pixel[0], pixel[1], pixel[2]]);
+        }
+    }
+
+    if rgb_pixels.is_empty() || max_colors == 0 {
+        return img.clone();
+    }
+
+    // NeuQuant でパレットを構築
+    let flat: Vec<u8> = rgb_pixels.iter().flat_map(|p| p.iter().copied()).collect();
+    let nq = color_quant::NeuQuant::new(
+        10, // サンプリングファクタ（1-30, 低=品質高）
+        max_colors.min(256) as usize,
+        &flat,
+    );
+
+    let palette: Vec<[u8; 3]> = (0..max_colors.min(256) as usize)
+        .filter_map(|i| {
+            nq.lookup(i).map(|c| [c[0], c[1], c[2]])
+        })
+        .collect();
+
+    // 各ピクセルを最近傍パレット色にマッピング
+    let mut output = image::RgbaImage::new(w, h);
+
+    match dithering {
+        DitheringMethod::None => {
+            for (x, y, pixel) in img.enumerate_pixels() {
+                if preserve_alpha && pixel[3] == 0 {
+                    output.put_pixel(x, y, *pixel);
+                    continue;
+                }
+                let idx = nq.index_of(&[pixel[0], pixel[1], pixel[2]]);
+                let c = palette.get(idx).copied().unwrap_or([pixel[0], pixel[1], pixel[2]]);
+                output.put_pixel(x, y, image::Rgba([c[0], c[1], c[2], pixel[3]]));
+            }
+        }
+        DitheringMethod::FloydSteinberg => {
+            // Floyd-Steinberg エラー拡散
+            let mut error_buf: Vec<Vec<[f32; 3]>> =
+                vec![vec![[0.0; 3]; w as usize]; h as usize];
+
+            for y in 0..h {
+                for x in 0..w {
+                    let pixel = img.get_pixel(x, y);
+                    if preserve_alpha && pixel[3] == 0 {
+                        output.put_pixel(x, y, *pixel);
+                        continue;
+                    }
+
+                    let err = error_buf[y as usize][x as usize];
+                    let r = (pixel[0] as f32 + err[0]).clamp(0.0, 255.0);
+                    let g = (pixel[1] as f32 + err[1]).clamp(0.0, 255.0);
+                    let b = (pixel[2] as f32 + err[2]).clamp(0.0, 255.0);
+
+                    let idx = nq.index_of(&[r as u8, g as u8, b as u8]);
+                    let c = palette.get(idx).copied().unwrap_or([r as u8, g as u8, b as u8]);
+
+                    output.put_pixel(x, y, image::Rgba([c[0], c[1], c[2], pixel[3]]));
+
+                    let quant_err = [r - c[0] as f32, g - c[1] as f32, b - c[2] as f32];
+
+                    // 7/16 右, 3/16 左下, 5/16 下, 1/16 右下
+                    if x + 1 < w {
+                        let e = &mut error_buf[y as usize][(x + 1) as usize];
+                        for i in 0..3 { e[i] += quant_err[i] * 7.0 / 16.0; }
+                    }
+                    if y + 1 < h {
+                        if x > 0 {
+                            let e = &mut error_buf[(y + 1) as usize][(x - 1) as usize];
+                            for i in 0..3 { e[i] += quant_err[i] * 3.0 / 16.0; }
+                        }
+                        let e = &mut error_buf[(y + 1) as usize][x as usize];
+                        for i in 0..3 { e[i] += quant_err[i] * 5.0 / 16.0; }
+                        if x + 1 < w {
+                            let e = &mut error_buf[(y + 1) as usize][(x + 1) as usize];
+                            for i in 0..3 { e[i] += quant_err[i] * 1.0 / 16.0; }
+                        }
+                    }
+                }
+            }
+        }
+        DitheringMethod::Ordered => {
+            // 4x4 Bayer matrix ordered dithering
+            let bayer: [[f32; 4]; 4] = [
+                [0.0, 8.0, 2.0, 10.0],
+                [12.0, 4.0, 14.0, 6.0],
+                [3.0, 11.0, 1.0, 9.0],
+                [15.0, 7.0, 13.0, 5.0],
+            ];
+
+            let scale = 255.0 / max_colors.max(1) as f32;
+
+            for (x, y, pixel) in img.enumerate_pixels() {
+                if preserve_alpha && pixel[3] == 0 {
+                    output.put_pixel(x, y, *pixel);
+                    continue;
+                }
+
+                let threshold = (bayer[(y % 4) as usize][(x % 4) as usize] / 16.0 - 0.5) * scale;
+
+                let r = (pixel[0] as f32 + threshold).clamp(0.0, 255.0);
+                let g = (pixel[1] as f32 + threshold).clamp(0.0, 255.0);
+                let b = (pixel[2] as f32 + threshold).clamp(0.0, 255.0);
+
+                let idx = nq.index_of(&[r as u8, g as u8, b as u8]);
+                let c = palette.get(idx).copied().unwrap_or([r as u8, g as u8, b as u8]);
+                output.put_pixel(x, y, image::Rgba([c[0], c[1], c[2], pixel[3]]));
+            }
+        }
+    }
+
+    output
+}

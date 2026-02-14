@@ -28,7 +28,7 @@ pub fn create_character(conn: &Connection, input: &CreateCharacter) -> Result<Ch
 pub fn get_character(conn: &Connection, id: &str) -> Result<Option<Character>> {
     let mut stmt = conn.prepare(
         "SELECT id, project_id, name, category, custom_prompt,
-                status, spritesheet_path, created_at, updated_at
+                status, spritesheet_path, concept_image_path, created_at, updated_at
          FROM characters WHERE id = ?1",
     )?;
 
@@ -42,8 +42,9 @@ pub fn get_character(conn: &Connection, id: &str) -> Result<Option<Character>> {
                 custom_prompt: row.get(4)?,
                 status: row.get(5)?,
                 spritesheet_path: row.get(6)?,
-                created_at: row.get(7)?,
-                updated_at: row.get(8)?,
+                concept_image_path: row.get(7)?,
+                created_at: row.get(8)?,
+                updated_at: row.get(9)?,
             })
         })
         .optional()?;
@@ -57,7 +58,7 @@ pub fn list_characters_by_project(
 ) -> Result<Vec<Character>> {
     let mut stmt = conn.prepare(
         "SELECT id, project_id, name, category, custom_prompt,
-                status, spritesheet_path, created_at, updated_at
+                status, spritesheet_path, concept_image_path, created_at, updated_at
          FROM characters WHERE project_id = ?1 ORDER BY created_at ASC",
     )?;
 
@@ -71,8 +72,9 @@ pub fn list_characters_by_project(
                 custom_prompt: row.get(4)?,
                 status: row.get(5)?,
                 spritesheet_path: row.get(6)?,
-                created_at: row.get(7)?,
-                updated_at: row.get(8)?,
+                concept_image_path: row.get(7)?,
+                created_at: row.get(8)?,
+                updated_at: row.get(9)?,
             })
         })?
         .collect::<Result<Vec<_>, _>>()?;
